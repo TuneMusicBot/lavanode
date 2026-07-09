@@ -1,0 +1,207 @@
+package com.github.WearifulCupid0.lavanode.player.filters;
+
+import com.github.WearifulCupid0.lavanode.player.filters.config.*;
+import com.sedmelluq.discord.lavaplayer.filter.AudioFilter;
+import com.sedmelluq.discord.lavaplayer.filter.FloatPcmAudioFilter;
+import com.sedmelluq.discord.lavaplayer.filter.PcmFilterFactory;
+import com.sedmelluq.discord.lavaplayer.filter.UniversalPcmAudioFilter;
+import com.sedmelluq.discord.lavaplayer.format.AudioDataFormat;
+import com.sedmelluq.discord.lavaplayer.track.AudioTrack;
+import io.vertx.core.json.JsonObject;
+
+import java.util.*;
+import java.util.function.Supplier;
+
+public class PlayerFilters {
+    private final ChannelMixConfig channelMix = new ChannelMixConfig();
+    private final EchoConfig echo = new EchoConfig();
+    private final EqualizerConfig equalizer = new EqualizerConfig();
+    private final HighPassConfig highpass = new HighPassConfig();
+    private final KaraokeConfig karaoke = new KaraokeConfig();
+    private final LowPassConfig lowPass = new LowPassConfig();
+    private final NormalizationConfig normalization = new NormalizationConfig();
+    private final RotationConfig rotation = new RotationConfig();
+    private final TimescaleConfig timescale = new TimescaleConfig();
+    private final TremoloConfig tremolo = new TremoloConfig();
+    private final VibratoConfig vibrato = new VibratoConfig();
+    private final VolumeConfig volume = new VolumeConfig();
+
+    private final Map<Class<? extends Config>, Config> filters = new LinkedHashMap<>();
+
+    public PlayerFilters() {
+        filters.put(channelMix.getClass(), channelMix);
+        filters.put(echo.getClass(), echo);
+        filters.put(equalizer.getClass(), equalizer);
+        filters.put(highpass.getClass(), highpass);
+        filters.put(karaoke.getClass(), karaoke);
+        filters.put(lowPass.getClass(), lowPass);
+        filters.put(normalization.getClass(), normalization);
+        filters.put(rotation.getClass(), rotation);
+        filters.put(timescale.getClass(), timescale);
+        filters.put(tremolo.getClass(), tremolo);
+        filters.put(vibrato.getClass(), vibrato);
+        filters.put(volume.getClass(), volume);
+    }
+
+    /**
+     * Returns true if a configuration of the provided class is present.
+     *
+     * @param clazz Class of the configuration.
+     *
+     * @return True if a configuration of the provided class is present.
+     */
+    public boolean hasConfig(Class<? extends Config> clazz) {
+        return filters.containsKey(clazz);
+    }
+
+    /**
+     * Returns a configuration of the provided class, if it exists. May return null.
+     *
+     * @param clazz Class of the configuration.
+     * @param <T>   Type of the configuration.
+     *
+     * @return The existing instance, or null if there is none.
+     */
+    @SuppressWarnings("unchecked")
+    public <T extends Config> T config(Class<T> clazz) {
+        return (T) filters.get(clazz);
+    }
+
+    /**
+     * Returns a configuration of the provided class if it exists, or creates
+     * a new instance of it with the provided supplier.
+     *
+     * @param clazz    Class of the configuration.
+     * @param supplier Supplier for creating a new instance of the configuration.
+     * @param <T>      Type of the configuration.
+     *
+     * @return An instance of the provided class stored. If none is stored, a new
+     * one is created and stored.
+     */
+    @SuppressWarnings("unchecked")
+    public <T extends Config> T config(Class<T> clazz, Supplier<T> supplier) {
+        return (T) filters.computeIfAbsent(clazz, __ -> {
+            var config = Objects.requireNonNull(supplier.get(), "Provided configuration may not be null");
+            if(!clazz.isInstance(config)) {
+                throw new IllegalArgumentException("Config not instance of provided class");
+            }
+            for(var c : filters.values()) {
+                if(c.name().equals(config.name())) {
+                    throw new IllegalArgumentException("Duplicate configuration name " + c.name());
+                }
+            }
+            return config;
+        });
+    }
+
+    /**
+     * Returns whether or not this configuration has filters enabled.
+     *
+     * <br>This method returns true if any of the configurations reports
+     * it's enabled.
+     *
+     * @return True if this configuration is enabled.
+     */
+    public boolean isEnabled() {
+        for(var config : filters.values()) {
+            if(config.enabled()) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Returns a filter factory with the currently enabled filters.
+     *
+     * <br>If no configuration is enabled, this method returns null.
+     *
+     * @return A filter factory for the currently enabled filters,
+     * or null if none are enabled.
+     */
+    public PcmFilterFactory factory() {
+        return isEnabled() ? new Factory(this) : null;
+    }
+
+    /**
+     * Encodes the state of this configuration and all filters in it.
+     *
+     * @return The encoded state.
+     */
+    public JsonObject toJson() {
+        var obj = new JsonObject();
+        for(Config config : filters.values()) {
+            obj.put(config.name(), config.encode().put("enabled", config.enabled()));
+        }
+        return obj;
+    }
+
+    public ChannelMixConfig channelMix() {
+        return channelMix;
+    }
+
+    public EchoConfig echo() {
+        return echo;
+    }
+
+    public EqualizerConfig equalizer() {
+        return equalizer;
+    }
+
+    public HighPassConfig highpass() {
+        return highpass;
+    }
+
+    public KaraokeConfig karaoke() {
+        return karaoke;
+    }
+
+    public LowPassConfig lowPass() {
+        return lowPass;
+    }
+
+    public NormalizationConfig normalization() {
+        return normalization;
+    }
+
+    public RotationConfig rotation() {
+        return rotation;
+    }
+
+    public TimescaleConfig timescale() {
+        return timescale;
+    }
+
+    public TremoloConfig tremolo() {
+        return tremolo;
+    }
+
+    public VibratoConfig vibrato() {
+        return vibrato;
+    }
+
+    public VolumeConfig volume() {
+        return volume;
+    }
+
+    private static class Factory implements PcmFilterFactory {
+        private final PlayerFilters playerFilters;
+
+        private Factory(PlayerFilters playerFilters) {
+            this.playerFilters = playerFilters;
+        }
+
+        @Override
+        public List<AudioFilter> buildChain(AudioTrack track, AudioDataFormat format, UniversalPcmAudioFilter output) {
+            var list = new ArrayList<AudioFilter>();
+            list.add(output);
+            for(var config : playerFilters.filters.values()) {
+                var filter = config.enabled() ?
+                        config.create(format, (FloatPcmAudioFilter) list.get(0)) //may return null
+                        : null;
+                if(filter != null) {
+                    list.add(0, filter);
+                }
+            }
+            return list.subList(0, list.size() - 1);
+        }
+    }
+}
