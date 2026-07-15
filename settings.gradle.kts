@@ -24,7 +24,7 @@ dependencyResolutionManagement {
 }
 
 fun VersionCatalogBuilder.voice() {
-    version("lavaplayer", "175fc345ad")
+    version("lavaplayer", "aa1e5a802e")
     version("koe", "3.0.0-pre6")
     version("libdave", "0.1.3")
     version("netty", "4.2.15.Final")
