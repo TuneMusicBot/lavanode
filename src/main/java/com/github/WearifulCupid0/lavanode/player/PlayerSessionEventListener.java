@@ -23,9 +23,39 @@ public class PlayerSessionEventListener extends AudioEventAdapter implements Pla
     }
 
     @Override
+    public void onPlayerUpdate(PlayerSession player, WebsocketOpCodes code) {
+        log.debug("Player updated! Player ID {}", player.getId());
+        playerManager.dispatchEvent(code, player.toJson(playerManager.getAudioPlayerManager()), player.getUserId());
+    }
+
+    @Override
+    public void onPlayerDestroy(PlayerSession player) {
+        log.debug("Player destroyed! Player ID {}", player.getId());
+        playerManager.dispatchEvent(WebsocketOpCodes.playerDestroy, player.toJson(playerManager.getAudioPlayerManager()), player.getUserId());
+    }
+
+    @Override
     public void onQueueUpdate(PlayerSession player) {
         log.debug("Queue updated! Player ID {}", player.getId());
         playerManager.dispatchEvent(WebsocketOpCodes.queueUpdate, withPlayer(player, player.getQueue().sizeToJson()), player.getUserId());
+    }
+
+    @Override
+    public void onQueueClear(PlayerSession player) {
+        log.debug("Queue cleared! Player ID {}", player.getId());
+        playerManager.dispatchEvent(WebsocketOpCodes.queueClear, withPlayer(player, player.getQueue().sizeToJson()), player.getUserId());
+    }
+
+    @Override
+    public void onQueueShuffle(PlayerSession player) {
+        log.debug("Queue shuffled! Player ID {}", player.getId());
+        playerManager.dispatchEvent(WebsocketOpCodes.queueShuffle, withPlayer(player, player.getQueue().sizeToJson()), player.getUserId());
+    }
+
+    @Override
+    public void onQueueEntryRemoved(PlayerSession player, QueueEntry entry) {
+        log.debug("Queue entry removed! Player ID {}", player.getId());
+        playerManager.dispatchEvent(WebsocketOpCodes.queueEntryRemoved, withPlayer(player, entry.toJson(playerManager.getAudioPlayerManager())), player.getUserId());
     }
 
     @Override

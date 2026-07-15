@@ -8,6 +8,7 @@ import com.github.WearifulCupid0.lavanode.player.frame.TrackEventGuard;
 import com.github.WearifulCupid0.lavanode.player.queue.PlayerQueue;
 import com.github.WearifulCupid0.lavanode.player.queue.PreparedTrack;
 import com.github.WearifulCupid0.lavanode.player.queue.QueueEntry;
+import com.github.WearifulCupid0.lavanode.util.SeekUtil;
 import com.sedmelluq.discord.lavaplayer.filter.PcmFilterFactory;
 import com.sedmelluq.discord.lavaplayer.format.StandardAudioDataFormats;
 import com.sedmelluq.discord.lavaplayer.player.AudioPlayer;
@@ -316,6 +317,53 @@ public final class GaplessFrameProvider extends AudioEventAdapter implements Pla
         }
     }
 
+    @Override
+    public boolean seek(long positionMs) {
+        synchronized (lock) {
+            if (closed || currentEntry == null) {
+                return false;
+            }
+
+            AudioTrack track = activeTrack != null ? activeTrack : activePlayer.getPlayingTrack();
+
+            if (!SeekUtil.canSeek(track)) {
+                return false;
+            }
+
+            long position = SeekUtil.clampPosition(track, positionMs);
+
+            /*
+             * Any preloaded gapless frame belongs to the old position. Seeking must
+             * invalidate it, otherwise the next provide() could still output stale
+             * audio from before the seek.
+             */
+            discardPreparedLocked();
+            currentPreloadedBuffer = null;
+            clearActiveEndLocked();
+            failedPreloadEntryId = null;
+            nextPreloadRetryAt = 0L;
+
+            AudioTrack playingTrack = activePlayer.getPlayingTrack();
+
+            if (playingTrack != null) {
+                playingTrack.setPosition(position);
+            } else {
+                QueueEntry seekEntry = currentEntry.copyWithPosition(position);
+
+                stopActiveSilentlyLocked();
+                currentEntry = null;
+
+                if (!startSpecificEntryLocked(seekEntry)) {
+                    return false;
+                }
+            }
+
+            session.setPosition(position);
+            prepareNextIfNeededLocked();
+
+            return true;
+        }
+    }
 
     @Override
     public QueueEntry removeQueuedEntry(String entryId) {

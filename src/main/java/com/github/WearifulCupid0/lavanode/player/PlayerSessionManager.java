@@ -85,6 +85,8 @@ public final class PlayerSessionManager {
 
         if (session != null) {
             session.destroy();
+
+            listener.onPlayerDestroy(session);
         }
 
         koe.destroyConnection(parsedGuildId);

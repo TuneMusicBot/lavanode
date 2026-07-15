@@ -176,6 +176,35 @@ public class RestHandler {
                 .method(HttpMethod.PATCH)
                 .handler(new JsonBodyHandler());
 
+
+        router.post("/v1/players/:guildId/seek").handler(context -> {
+            PlayerSession playerSession = context.get("playerSession");
+            JsonObject json = JsonBodyHandler.getBody(context);
+
+            Object rawPosition = json.getValue("position");
+
+            if (!(rawPosition instanceof Number)) {
+                RequestUtil.handleError(context, 400, "Missing or invalid position");
+                return;
+            }
+
+            long position = ((Number) rawPosition).longValue();
+
+            if (position < 0L) {
+                RequestUtil.handleError(context, 400, "Position must be greater than or equal to 0");
+                return;
+            }
+
+            boolean seeked = playerSession.seek(position);
+
+            if (!seeked) {
+                RequestUtil.handleError(context, 400, "Current track is not seekable or no track is playing");
+                return;
+            }
+
+            context.response().send(playerSession.toJson(main.getAudioPlayerManager()).toBuffer());
+        });
+
         router.get("/v1/players").handler(context -> {
             PlayerSessionManager sessionManager = getPlayerSession(context, main);
 
@@ -348,14 +377,15 @@ public class RestHandler {
                     if (!SourceTools.isBlank(trackEncoded)) {
                         AudioTrack track = RequestUtil.decodeTrack(playerManager, trackEncoded);
 
-                        if (track != null) {
+                        if (track != null)
                             formattedTracks.add(track);
-                            response.add(RequestUtil.trackToJson(playerManager, track));
-                        }
                     }
                 }
 
-                playerSession.enqueueMany(formattedTracks, requesterId, extraData);
+                List<QueueEntry> entries = playerSession.enqueueMany(formattedTracks, requesterId, extraData);
+
+                for (QueueEntry entry : entries)
+                    response.add(entry.toJson(playerManager));
 
                 context.response().send(response.toBuffer());
                 return;
@@ -374,9 +404,9 @@ public class RestHandler {
                 return;
             }
 
-            playerSession.enqueue(track, requesterId, extraData);
+            QueueEntry entry = playerSession.enqueue(track, requesterId, extraData);
 
-            context.response().send(RequestUtil.trackToJson(playerManager, track).toBuffer());
+            context.response().send(entry.toJson(playerManager).toBuffer());
         });
 
         String port = SourceTools.getPropertyOrEnv("PORT");

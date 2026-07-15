@@ -7,6 +7,7 @@ import com.github.WearifulCupid0.lavanode.player.frame.PlayerFrameProviderSnapsh
 import com.github.WearifulCupid0.lavanode.player.frame.TrackEventGuard;
 import com.github.WearifulCupid0.lavanode.player.queue.PlayerQueue;
 import com.github.WearifulCupid0.lavanode.player.queue.QueueEntry;
+import com.github.WearifulCupid0.lavanode.util.SeekUtil;
 import com.sedmelluq.discord.lavaplayer.filter.PcmFilterFactory;
 import com.sedmelluq.discord.lavaplayer.player.AudioPlayer;
 import com.sedmelluq.discord.lavaplayer.player.AudioPlayerManager;
@@ -753,6 +754,57 @@ public final class CrossfadeFrameProvider extends AudioEventAdapter implements P
         outgoingTrack = null;
     }
 
+    @Override
+    public boolean seek(long positionMs) {
+        synchronized (lock) {
+            if (closed || currentEntry == null) {
+                return false;
+            }
+
+            AudioTrack track = activeTrack != null ? activeTrack : activePlayer.getPlayingTrack();
+
+            if (!SeekUtil.canSeek(track)) {
+                return false;
+            }
+
+            long position = SeekUtil.clampPosition(track, positionMs);
+
+            /*
+             * Incoming/crossfade buffers are tied to the old playback position.
+             * Seeking while a preload or crossfade is active must cancel the
+             * transition and requeue the incoming entry, otherwise stale PCM frames
+             * could be mixed after the seek.
+             */
+            cancelIncomingPreloadLocked(true);
+            resetCrossfadeStateLocked();
+            activeBufferedFrames.clear();
+            promotedFinishedTrack = null;
+            promotedFinishedReason = null;
+
+            AudioTrack playingTrack = activePlayer.getPlayingTrack();
+
+            if (playingTrack != null) {
+                playingTrack.setPosition(position);
+            } else {
+                QueueEntry seekEntry = currentEntry.copyWithPosition(position);
+
+                clearActiveTrackLocked();
+                suppressEvents = true;
+                try {
+                    activePlayer.stopTrack();
+                } finally {
+                    suppressEvents = false;
+                }
+
+                currentEntry = null;
+                startSpecificEntryLocked(seekEntry);
+            }
+
+            session.setPosition(position);
+
+            return true;
+        }
+    }
 
     @Override
     public QueueEntry removeQueuedEntry(String entryId) {

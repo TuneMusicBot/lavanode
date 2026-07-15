@@ -10,6 +10,7 @@ import com.github.WearifulCupid0.lavanode.player.frame.gapless.GaplessFrameProvi
 import com.github.WearifulCupid0.lavanode.player.frame.normal.NormalFrameProvider;
 import com.github.WearifulCupid0.lavanode.player.queue.PlayerQueue;
 import com.github.WearifulCupid0.lavanode.player.queue.QueueEntry;
+import com.github.WearifulCupid0.lavanode.server.websocket.WebsocketOpCodes;
 import com.github.WearifulCupid0.lavanode.util.RequestUtil;
 import com.sedmelluq.discord.lavaplayer.filter.PcmFilterFactory;
 import com.sedmelluq.discord.lavaplayer.player.AudioPlayerManager;
@@ -116,6 +117,8 @@ public final class PlayerSession {
 
         this.frameProvider = newProvider;
         this.frameProviderMode = mode;
+
+        this.listener.onPlayerUpdate(this, WebsocketOpCodes.providerModeUpdate);
 
         oldProvider.destroy();
     }
@@ -248,12 +251,26 @@ public final class PlayerSession {
             applyPendingFrameProviderModeIfPossibleLocked();
         }
     }
+    public boolean seek(long positionMs) {
+        synchronized (lock) {
+            boolean seeked = this.frameProvider.seek(positionMs);
+
+            if (seeked) {
+                this.listener.onPlayerUpdate(this, WebsocketOpCodes.seekUpdate);
+            }
+
+            applyPendingFrameProviderModeIfPossibleLocked();
+
+            return seeked;
+        }
+    }
 
     public boolean shuffleQueue() {
         synchronized (lock) {
             boolean shuffled = this.queue.shuffle();
 
             if (shuffled) {
+                this.listener.onQueueShuffle(this);
                 this.listener.onQueueUpdate(this);
             }
 
@@ -266,6 +283,7 @@ public final class PlayerSession {
             QueueEntry removed = this.frameProvider.removeQueuedEntry(entryId);
 
             if (removed != null) {
+                this.listener.onQueueEntryRemoved(this, removed);
                 this.listener.onQueueUpdate(this);
             }
 
@@ -278,6 +296,7 @@ public final class PlayerSession {
             boolean changed = this.frameProvider.clearQueuedEntries();
 
             if (changed) {
+                this.listener.onQueueClear(this);
                 this.listener.onQueueUpdate(this);
             }
 
@@ -290,6 +309,7 @@ public final class PlayerSession {
             boolean changed = this.frameProvider.clearQueueHistory();
 
             if (changed) {
+                this.listener.onQueueClear(this);
                 this.listener.onQueueUpdate(this);
             }
 
@@ -302,6 +322,7 @@ public final class PlayerSession {
             boolean changed = this.frameProvider.clearQueuedEntriesAndHistory();
 
             if (changed) {
+                this.listener.onQueueClear(this);
                 this.listener.onQueueUpdate(this);
             }
 
@@ -309,9 +330,9 @@ public final class PlayerSession {
         }
     }
 
-    public void enqueueMany(List<AudioTrack> list, String requesterId, JsonObject extraData) {
+    public List<QueueEntry> enqueueMany(List<AudioTrack> list, String requesterId, JsonObject extraData) {
         if (list == null || list.isEmpty()) {
-            return;
+            return new ArrayList<>();
         }
 
         synchronized (lock) {
@@ -332,14 +353,16 @@ public final class PlayerSession {
             }
 
             if (entries.isEmpty()) {
-                return;
+                return entries;
             }
 
             this.frameProvider.enqueueMany(entries);
+
+            return entries;
         }
     }
 
-    public void enqueue(AudioTrack track, String requesterId, JsonObject extraData) {
+    public QueueEntry enqueue(AudioTrack track, String requesterId, JsonObject extraData) {
         synchronized (lock) {
             QueueEntry entry = new QueueEntry(
                     UUID.randomUUID().toString(),
@@ -350,12 +373,15 @@ public final class PlayerSession {
             );
 
             this.frameProvider.enqueue(entry);
+
+            return entry;
         }
     }
 
     public void setFilterFactory(PcmFilterFactory factory) {
         synchronized (lock) {
             this.frameProvider.setFilterFactory(factory);
+            this.listener.onPlayerUpdate(this, WebsocketOpCodes.filtersUpdate);
         }
     }
 
@@ -363,6 +389,7 @@ public final class PlayerSession {
         synchronized (lock) {
             this.frameProvider.pause();
             this.playerFrameLossCounter.end();
+            this.listener.onPlayerUpdate(this, WebsocketOpCodes.pauseUpdate);
         }
     }
 
@@ -370,12 +397,14 @@ public final class PlayerSession {
         synchronized (lock) {
             this.frameProvider.resume();
             this.playerFrameLossCounter.start();
+            this.listener.onPlayerUpdate(this, WebsocketOpCodes.pauseUpdate);
         }
     }
 
     public void setVolume(int volume) {
         synchronized (lock) {
             this.frameProvider.setVolume(Math.max(0, Math.min(1000, volume)));
+            this.listener.onPlayerUpdate(this, WebsocketOpCodes.volumeUpdate);
         }
     }
 

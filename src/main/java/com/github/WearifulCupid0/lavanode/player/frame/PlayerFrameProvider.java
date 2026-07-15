@@ -19,6 +19,8 @@ public interface PlayerFrameProvider {
 
     void previous();
 
+    boolean seek(long positionMs);
+
     QueueEntry removeQueuedEntry(String entryId);
 
     boolean clearQueuedEntries();

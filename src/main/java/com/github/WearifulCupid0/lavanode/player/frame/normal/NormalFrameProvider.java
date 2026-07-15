@@ -7,6 +7,7 @@ import com.github.WearifulCupid0.lavanode.player.frame.PlayerFrameProviderSnapsh
 import com.github.WearifulCupid0.lavanode.player.frame.TrackEventGuard;
 import com.github.WearifulCupid0.lavanode.player.queue.PlayerQueue;
 import com.github.WearifulCupid0.lavanode.player.queue.QueueEntry;
+import com.github.WearifulCupid0.lavanode.util.SeekUtil;
 import com.sedmelluq.discord.lavaplayer.filter.PcmFilterFactory;
 import com.sedmelluq.discord.lavaplayer.player.AudioPlayer;
 import com.sedmelluq.discord.lavaplayer.player.AudioPlayerManager;
@@ -201,6 +202,23 @@ public class NormalFrameProvider extends AudioEventAdapter implements PlayerFram
         }
     }
 
+    @Override
+    public boolean seek(long positionMs) {
+        synchronized (lock) {
+            AudioTrack track = activeTrack != null ? activeTrack : audioPlayer.getPlayingTrack();
+
+            if (!SeekUtil.canSeek(track)) {
+                return false;
+            }
+
+            long position = SeekUtil.clampPosition(track, positionMs);
+
+            track.setPosition(position);
+            session.setPosition(position);
+
+            return true;
+        }
+    }
 
     @Override
     public QueueEntry removeQueuedEntry(String entryId) {
