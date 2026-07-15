@@ -205,6 +205,38 @@ public class RestHandler {
             context.response().send(playerSession.toJson(main.getAudioPlayerManager()).toBuffer());
         });
 
+        router.post("/v1/players/:guildId/loop/track").handler(context -> {
+            PlayerSession playerSession = context.get("playerSession");
+            JsonObject json = JsonBodyHandler.getBody(context);
+
+            Boolean enabled = readEnabled(json, "trackLoop");
+
+            if (enabled == null) {
+                RequestUtil.handleError(context, 400, "Missing or invalid enabled");
+                return;
+            }
+
+            playerSession.setTrackLoop(enabled);
+
+            context.response().send(playerSession.toJson(main.getAudioPlayerManager()).toBuffer());
+        });
+
+        router.post("/v1/players/:guildId/loop/queue").handler(context -> {
+            PlayerSession playerSession = context.get("playerSession");
+            JsonObject json = JsonBodyHandler.getBody(context);
+
+            Boolean enabled = readEnabled(json, "queueLoop");
+
+            if (enabled == null) {
+                RequestUtil.handleError(context, 400, "Missing or invalid enabled");
+                return;
+            }
+
+            playerSession.setQueueLoop(enabled);
+
+            context.response().send(playerSession.toJson(main.getAudioPlayerManager()).toBuffer());
+        });
+
         router.get("/v1/players").handler(context -> {
             PlayerSessionManager sessionManager = getPlayerSession(context, main);
 
@@ -286,6 +318,33 @@ public class RestHandler {
             RequestUtil.updateFilters(playerSession, json);
 
             context.response().send(playerSession.getPlayerFilters().toJson().toBuffer());
+        });
+
+        router.post("/v1/players/:guildId/play").handler(context -> {
+            PlayerSession playerSession = context.get("playerSession");
+            JsonObject json = JsonBodyHandler.getBody(context);
+
+            String trackEncoded = json.getString("track");
+
+            if (SourceTools.isBlank(trackEncoded)) {
+                RequestUtil.handleError(context, 400, "Missing encoded track");
+                return;
+            }
+
+            AudioPlayerManager playerManager = main.getAudioPlayerManager();
+            AudioTrack track = RequestUtil.decodeTrack(playerManager, trackEncoded);
+
+            if (track == null) {
+                RequestUtil.handleError(context, 400, "Invalid encoded track");
+                return;
+            }
+
+            String requesterId = json.getString("userId", context.get("user-id"));
+            JsonObject extraData = json.getJsonObject("extraData");
+
+            playerSession.play(track, requesterId, extraData);
+
+            context.response().send(playerSession.toJson(playerManager).toBuffer());
         });
 
         router.get("/v1/players/:guildId/queue").handler(context -> {
@@ -448,6 +507,22 @@ public class RestHandler {
 
     private static PlayerSession getOrCreatePlayer(String guildId, PlayerSessionManager sessionManager) {
         return sessionManager.getOrCreate(guildId);
+    }
+
+    private static Boolean readEnabled(JsonObject json, String fallbackKey) {
+        Object rawEnabled = json.getValue("enabled");
+
+        if (rawEnabled instanceof Boolean enabled) {
+            return enabled;
+        }
+
+        Object rawFallback = json.getValue(fallbackKey);
+
+        if (rawFallback instanceof Boolean enabled) {
+            return enabled;
+        }
+
+        return null;
     }
 
     private static PlayerSessionManager getPlayerSession(RoutingContext context, Main main) {

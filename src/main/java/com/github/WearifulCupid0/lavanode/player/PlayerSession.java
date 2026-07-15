@@ -51,6 +51,8 @@ public final class PlayerSession {
     private PlayerFrameProviderMode pendingFrameProviderMode;
 
     private volatile double realPosition = 0.0;
+    private volatile boolean trackLoop;
+    private volatile boolean queueLoop;
 
     public PlayerSession(
             String id,
@@ -211,6 +213,68 @@ public final class PlayerSession {
 
     public PlayerQueue getQueue() {
         return queue;
+    }
+
+    public boolean isTrackLoop() {
+        return trackLoop;
+    }
+
+    public boolean isQueueLoop() {
+        return queueLoop;
+    }
+
+    public JsonObject loopToJson() {
+        return new JsonObject()
+                .put("track", trackLoop)
+                .put("queue", queueLoop);
+    }
+
+    public void setTrackLoop(boolean enabled) {
+        PlayerFrameProvider provider;
+        boolean changed;
+
+        synchronized (lock) {
+            changed = this.trackLoop != enabled;
+
+            this.trackLoop = enabled;
+
+            if (enabled && this.queueLoop) {
+                this.queueLoop = false;
+                changed = true;
+            }
+
+            provider = this.frameProvider;
+        }
+
+        provider.onLoopOptionsUpdated();
+
+        if (changed) {
+            this.listener.onPlayerUpdate(this, WebsocketOpCodes.loopUpdate);
+        }
+    }
+
+    public void setQueueLoop(boolean enabled) {
+        PlayerFrameProvider provider;
+        boolean changed;
+
+        synchronized (lock) {
+            changed = this.queueLoop != enabled;
+
+            this.queueLoop = enabled;
+
+            if (enabled && this.trackLoop) {
+                this.trackLoop = false;
+                changed = true;
+            }
+
+            provider = this.frameProvider;
+        }
+
+        provider.onLoopOptionsUpdated();
+
+        if (changed) {
+            this.listener.onPlayerUpdate(this, WebsocketOpCodes.loopUpdate);
+        }
     }
 
     public PlayerEventListener getListener() { return listener; }
@@ -378,6 +442,23 @@ public final class PlayerSession {
         }
     }
 
+    public QueueEntry play(AudioTrack track, String requesterId, JsonObject extraData) {
+        synchronized (lock) {
+            QueueEntry entry = new QueueEntry(
+                    UUID.randomUUID().toString(),
+                    track,
+                    requesterId,
+                    System.currentTimeMillis(),
+                    extraData
+            );
+
+            this.frameProvider.play(entry);
+            applyPendingFrameProviderModeIfPossibleLocked();
+
+            return entry;
+        }
+    }
+
     public void setFilterFactory(PcmFilterFactory factory) {
         synchronized (lock) {
             this.frameProvider.setFilterFactory(factory);
@@ -435,6 +516,11 @@ public final class PlayerSession {
                     .put("userId", userId)
                     .put("filters", playerFilters.toJson())
                     .put("providerMode", frameProviderMode.toString())
+                    .put("trackLoop", trackLoop)
+                    .put("queueLoop", queueLoop)
+                    .put("loop", new JsonObject()
+                            .put("track", trackLoop)
+                            .put("queue", queueLoop))
                     .put("volume", frameProvider.getAudioPlayer().getVolume())
                     .put("paused", frameProvider.getAudioPlayer().isPaused())
                     .put("transitioning", frameProvider.isTransitioning())

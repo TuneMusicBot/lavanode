@@ -262,7 +262,7 @@ public final class CrossfadeFrameProvider extends AudioEventAdapter implements P
     }
 
     private void maybeStartIncomingPreloadLocked() {
-        if (incomingStarted || crossfading || currentEntry == null || queue.peek() == null) {
+        if (session.isTrackLoop() || incomingStarted || crossfading || currentEntry == null || queue.peek() == null) {
             return;
         }
 
@@ -402,9 +402,7 @@ public final class CrossfadeFrameProvider extends AudioEventAdapter implements P
 
         QueueEntry oldEntry = outgoingEntry != null ? outgoingEntry : currentEntry;
 
-        if (oldEntry != null && oldTrackEndReason == AudioTrackEndReason.FINISHED) {
-            queue.addToHistory(oldEntry.copyWithPosition(0));
-        }
+        handleFinishedEntryLoopLocked(oldEntry, oldTrackEndReason);
 
         AudioTrack oldTrack = outgoingTrack != null ? outgoingTrack : activeTrack;
 
@@ -478,9 +476,7 @@ public final class CrossfadeFrameProvider extends AudioEventAdapter implements P
                 session.resetPosition();
             }
 
-            emitQueueEndLocked();
-            listener.onQueueUpdate(session);
-            return false;
+            return emitQueueEndLocked();
         }
 
         currentEntry = next;
@@ -573,6 +569,53 @@ public final class CrossfadeFrameProvider extends AudioEventAdapter implements P
 
         listener.onTrackStart(session, currentEntry);
         listener.onQueueUpdate(session);
+    }
+
+    @Override
+    public void play(QueueEntry entry) {
+        if (entry == null) {
+            return;
+        }
+
+        synchronized (lock) {
+            if (closed) {
+                return;
+            }
+
+            QueueEntry replacedEntry = currentEntry;
+            AudioTrack replacedTrack = outgoingTrack != null
+                    ? outgoingTrack
+                    : (activeTrack != null ? activeTrack : activePlayer.getPlayingTrack());
+
+            if (replacedEntry != null) {
+                queue.addToHistory(replacedEntry.copyWithPosition(0));
+                listener.onTrackEnd(
+                        session,
+                        replacedTrack != null ? replacedTrack : replacedEntry.getTrack(),
+                        AudioTrackEndReason.STOPPED
+                );
+            }
+
+            cancelIncomingPreloadLocked(true);
+            resetCrossfadeStateLocked();
+            activeBufferedFrames.clear();
+            promotedFinishedTrack = null;
+            promotedFinishedReason = null;
+
+            clearActiveTrackLocked();
+            clearIncomingTrackLocked();
+
+            suppressEvents = true;
+            try {
+                activePlayer.stopTrack();
+                incomingPlayer.stopTrack();
+            } finally {
+                suppressEvents = false;
+            }
+
+            currentEntry = null;
+            startSpecificEntryLocked(entry.copyWithPosition(0));
+        }
     }
 
     @Override
@@ -752,6 +795,23 @@ public final class CrossfadeFrameProvider extends AudioEventAdapter implements P
         crossfadeFrameIndex = 0;
         outgoingEntry = null;
         outgoingTrack = null;
+    }
+
+    @Override
+    public void onLoopOptionsUpdated() {
+        synchronized (lock) {
+            if (closed) {
+                return;
+            }
+
+            if (session.isTrackLoop()) {
+                cancelIncomingPreloadLocked(true);
+                resetCrossfadeStateLocked();
+                activeBufferedFrames.clear();
+                promotedFinishedTrack = null;
+                promotedFinishedReason = null;
+            }
+        }
     }
 
     @Override
@@ -1087,9 +1147,18 @@ public final class CrossfadeFrameProvider extends AudioEventAdapter implements P
             if (endedEntry != null) {
                 listener.onTrackEnd(session, track, endReason);
 
-                if (endReason == AudioTrackEndReason.FINISHED) {
-                    queue.addToHistory(endedEntry.copyWithPosition(0));
+                if (endReason == AudioTrackEndReason.FINISHED && session.isTrackLoop()) {
+                    currentEntry = null;
+                    clearActiveTrackLocked();
+                    promotedFinishedTrack = null;
+                    promotedFinishedReason = null;
+                    activeBufferedFrames.clear();
+                    session.resetPosition();
+                    startSpecificEntryLocked(endedEntry.copyWithPosition(0));
+                    return;
                 }
+
+                handleFinishedEntryLoopLocked(endedEntry, endReason);
             }
 
             currentEntry = null;
@@ -1100,10 +1169,7 @@ public final class CrossfadeFrameProvider extends AudioEventAdapter implements P
             session.resetPosition();
 
             if (endReason.mayStartNext) {
-                if (!startNextLocked(false)) {
-                    emitQueueEndLocked();
-                }
-
+                startNextLocked(false);
                 return;
             }
 
@@ -1242,8 +1308,22 @@ public final class CrossfadeFrameProvider extends AudioEventAdapter implements P
                 ? promotedFinishedReason
                 : AudioTrackEndReason.FINISHED;
 
-        if (currentEntry != null) {
-            listener.onTrackEnd(session, track != null ? track : currentEntry.getTrack(), reason);
+        QueueEntry endedEntry = currentEntry;
+
+        if (endedEntry != null) {
+            listener.onTrackEnd(session, track != null ? track : endedEntry.getTrack(), reason);
+
+            if (reason == AudioTrackEndReason.FINISHED && session.isTrackLoop()) {
+                currentEntry = null;
+                clearActiveTrackLocked();
+                promotedFinishedTrack = null;
+                promotedFinishedReason = null;
+                session.resetPosition();
+                startSpecificEntryLocked(endedEntry.copyWithPosition(0));
+                return;
+            }
+
+            handleFinishedEntryLoopLocked(endedEntry, reason);
         }
 
         currentEntry = null;
@@ -1259,14 +1339,30 @@ public final class CrossfadeFrameProvider extends AudioEventAdapter implements P
         }
     }
 
-    private void emitQueueEndLocked() {
-        if (queueEndEmitted) {
+    private void handleFinishedEntryLoopLocked(QueueEntry entry, AudioTrackEndReason reason) {
+        if (entry == null || reason != AudioTrackEndReason.FINISHED || session.isTrackLoop()) {
             return;
+        }
+
+        queue.addToHistory(entry.copyWithPosition(0));
+    }
+
+    private boolean emitQueueEndLocked() {
+        if (queueEndEmitted) {
+            return false;
         }
 
         queueEndEmitted = true;
         listener.onQueueUpdate(session);
         listener.onQueueEnd(session);
+
+        if (session.isQueueLoop() && queue.moveHistoryToQueueFromStart()) {
+            queueEndEmitted = false;
+            listener.onQueueUpdate(session);
+            return startNextLocked(false);
+        }
+
+        return false;
     }
 
     private double getPositionIncrementMs() {

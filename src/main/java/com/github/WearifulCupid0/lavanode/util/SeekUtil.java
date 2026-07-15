@@ -3,9 +3,6 @@ package com.github.WearifulCupid0.lavanode.util;
 import com.sedmelluq.discord.lavaplayer.track.AudioTrack;
 
 public final class SeekUtil {
-    private SeekUtil() {
-    }
-
     public static long clampPosition(AudioTrack track, long positionMs) {
         long position = Math.max(0L, positionMs);
 

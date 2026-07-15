@@ -8,6 +8,7 @@ public enum WebsocketOpCodes {
     volumeUpdate,
     pauseUpdate,
     seekUpdate,
+    loopUpdate,
     providerModeUpdate,
 
     queueUpdate,

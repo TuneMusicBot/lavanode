@@ -100,9 +100,7 @@ public class NormalFrameProvider extends AudioEventAdapter implements PlayerFram
                 session.resetPosition();
             }
 
-            emitQueueEndLocked();
-            listener.onQueueUpdate(session);
-            return false;
+            return emitQueueEndLocked();
         }
 
         return startEntryLocked(next);
@@ -153,6 +151,30 @@ public class NormalFrameProvider extends AudioEventAdapter implements PlayerFram
             audioPlayer.stopTrack();
         } finally {
             suppressEvents = false;
+        }
+    }
+
+    @Override
+    public void play(QueueEntry entry) {
+        if (entry == null) {
+            return;
+        }
+
+        synchronized (lock) {
+            QueueEntry replacedEntry = currentEntry;
+            AudioTrack replacedTrack = activeTrack != null ? activeTrack : audioPlayer.getPlayingTrack();
+
+            if (replacedEntry != null) {
+                queue.addToHistory(replacedEntry.copyWithPosition(0));
+                listener.onTrackEnd(
+                        session,
+                        replacedTrack != null ? replacedTrack : replacedEntry.getTrack(),
+                        AudioTrackEndReason.STOPPED
+                );
+            }
+
+            currentEntry = null;
+            startEntryLocked(entry.copyWithPosition(0));
         }
     }
 
@@ -374,9 +396,15 @@ public class NormalFrameProvider extends AudioEventAdapter implements PlayerFram
             if (endedEntry != null) {
                 listener.onTrackEnd(session, track, endReason);
 
-                if (endReason == AudioTrackEndReason.FINISHED) {
-                    queue.addToHistory(endedEntry.copyWithPosition(0));
+                if (endReason == AudioTrackEndReason.FINISHED && session.isTrackLoop()) {
+                    currentEntry = null;
+                    clearActiveTrackLocked();
+                    session.resetPosition();
+                    startEntryLocked(endedEntry.copyWithPosition(0));
+                    return;
                 }
+
+                handleFinishedEntryLoopLocked(endedEntry, endReason);
             }
 
             currentEntry = null;
@@ -419,6 +447,14 @@ public class NormalFrameProvider extends AudioEventAdapter implements PlayerFram
         }
     }
 
+    private void handleFinishedEntryLoopLocked(QueueEntry entry, AudioTrackEndReason endReason) {
+        if (entry == null || endReason != AudioTrackEndReason.FINISHED) {
+            return;
+        }
+
+        queue.addToHistory(entry.copyWithPosition(0));
+    }
+
     private void bindActiveTrackLocked(AudioTrack track) {
         trackEventGuard.unbind(activeTrack);
         activeTrack = track;
@@ -435,13 +471,21 @@ public class NormalFrameProvider extends AudioEventAdapter implements PlayerFram
                 && trackEventGuard.accepts(activeTrack, activeTrackGeneration, track);
     }
 
-    private void emitQueueEndLocked() {
+    private boolean emitQueueEndLocked() {
         if (queueEndEmitted) {
-            return;
+            return false;
         }
 
         queueEndEmitted = true;
         listener.onQueueUpdate(session);
         listener.onQueueEnd(session);
+
+        if (session.isQueueLoop() && queue.moveHistoryToQueueFromStart()) {
+            queueEndEmitted = false;
+            listener.onQueueUpdate(session);
+            return startNextLocked(false);
+        }
+
+        return false;
     }
 }

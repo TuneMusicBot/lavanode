@@ -10,7 +10,6 @@ import com.github.WearifulCupid0.lavanode.player.queue.PreparedTrack;
 import com.github.WearifulCupid0.lavanode.player.queue.QueueEntry;
 import com.github.WearifulCupid0.lavanode.util.SeekUtil;
 import com.sedmelluq.discord.lavaplayer.filter.PcmFilterFactory;
-import com.sedmelluq.discord.lavaplayer.format.StandardAudioDataFormats;
 import com.sedmelluq.discord.lavaplayer.player.AudioPlayer;
 import com.sedmelluq.discord.lavaplayer.player.AudioPlayerManager;
 import com.sedmelluq.discord.lavaplayer.player.event.AudioEventAdapter;
@@ -21,14 +20,10 @@ import com.sedmelluq.discord.lavaplayer.track.playback.MutableAudioFrame;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.nio.ByteBuffer;
-import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 
 public final class GaplessFrameProvider extends AudioEventAdapter implements PlayerFrameProvider {
     private static final Logger log = LoggerFactory.getLogger(GaplessFrameProvider.class);
@@ -40,9 +35,8 @@ public final class GaplessFrameProvider extends AudioEventAdapter implements Pla
     private final PlayerEventListener listener;
     private final ExecutorService preloadExecutor;
 
-    private final long preloadBeforeMs;
-    private final long preloadLoadTimeoutMs;
-    private final int prebufferFrames;
+    private final GaplessPreloadConfig preloadConfig;
+    private final GaplessPreloadPump preloadPump;
 
     private AudioPlayer activePlayer;
     private AudioPlayer standbyPlayer;
@@ -86,9 +80,8 @@ public final class GaplessFrameProvider extends AudioEventAdapter implements Pla
         this.queue = session.getQueue();
         this.listener = listener;
         this.preloadExecutor = preloadExecutor;
-        this.preloadBeforeMs = preloadBeforeMs;
-        this.prebufferFrames = prebufferFrames;
-        this.preloadLoadTimeoutMs = preloadLoadTimeoutMs;
+        this.preloadConfig = new GaplessPreloadConfig(preloadBeforeMs, prebufferFrames, preloadLoadTimeoutMs);
+        this.preloadPump = new GaplessPreloadPump(preloadConfig, this::handlePreloadFailure);
 
         this.activePlayer = playerManager.createPlayer();
         this.standbyPlayer = playerManager.createPlayer();
@@ -194,18 +187,25 @@ public final class GaplessFrameProvider extends AudioEventAdapter implements Pla
                 return false;
             }
 
-            AudioTrackEndReason endReason = activeEndedReason;
+            AudioTrackEndReason endReason = activeEndedReason != null
+                    ? activeEndedReason
+                    : AudioTrackEndReason.FINISHED;
+            QueueEntry endedEntry = currentEntry;
 
             if (currentEntry != null) {
                 emitActiveEndLocked();
             }
 
-            if (endReason != null && !endReason.mayStartNext) {
-                enterIdleLocked(true);
-                return false;
-            }
+            if (endReason == AudioTrackEndReason.FINISHED && session.isTrackLoop() && endedEntry != null) {
+                startSpecificEntryLocked(endedEntry.copyWithPosition(0));
+            } else {
+                if (endReason != null && !endReason.mayStartNext) {
+                    enterIdleLocked(true);
+                    return false;
+                }
 
-            advanceLocked();
+                advanceLocked();
+            }
 
             preloadedFrame = pollPreloadedFrameLocked();
 
@@ -227,11 +227,8 @@ public final class GaplessFrameProvider extends AudioEventAdapter implements Pla
         clearActiveEndLocked();
         session.resetPosition();
 
-        if (emitQueueEnd && !queueEndEmitted) {
-            queueEndEmitted = true;
-
-            listener.onQueueUpdate(session);
-            listener.onQueueEnd(session);
+        if (emitQueueEnd) {
+            emitQueueEndLocked();
         }
     }
 
@@ -242,6 +239,45 @@ public final class GaplessFrameProvider extends AudioEventAdapter implements Pla
             }
 
             prepareNextIfNeededLocked();
+        }
+    }
+
+    @Override
+    public void play(QueueEntry entry) {
+        if (entry == null) {
+            return;
+        }
+
+        synchronized (lock) {
+            if (closed) {
+                return;
+            }
+
+            QueueEntry replacedEntry = currentEntry;
+            AudioTrack replacedTrack = activeTrack != null ? activeTrack : activePlayer.getPlayingTrack();
+
+            discardPreparedLocked();
+            currentPreloadedBuffer = null;
+            clearActiveEndLocked();
+            failedPreloadEntryId = null;
+            nextPreloadRetryAt = 0L;
+
+            if (replacedEntry != null) {
+                queue.addToHistory(replacedEntry.copyWithPosition(0));
+            }
+
+            stopActiveSilentlyLocked();
+
+            if (replacedEntry != null) {
+                listener.onTrackEnd(
+                        session,
+                        replacedTrack != null ? replacedTrack : replacedEntry.getTrack(),
+                        AudioTrackEndReason.STOPPED
+                );
+            }
+
+            currentEntry = null;
+            startSpecificEntryLocked(entry.copyWithPosition(0));
         }
     }
 
@@ -362,6 +398,25 @@ public final class GaplessFrameProvider extends AudioEventAdapter implements Pla
             prepareNextIfNeededLocked();
 
             return true;
+        }
+    }
+
+    @Override
+    public void onLoopOptionsUpdated() {
+        synchronized (lock) {
+            if (closed) {
+                return;
+            }
+
+            if (session.isTrackLoop()) {
+                discardPreparedLocked();
+                currentPreloadedBuffer = null;
+                failedPreloadEntryId = null;
+                nextPreloadRetryAt = 0L;
+                return;
+            }
+
+            prepareNextIfNeededLocked();
         }
     }
 
@@ -713,7 +768,7 @@ public final class GaplessFrameProvider extends AudioEventAdapter implements Pla
     }
 
     private void prepareNextIfNeededLocked() {
-        if (preparedTrack != null || paused) {
+        if (preparedTrack != null || paused || session.isTrackLoop()) {
             return;
         }
 
@@ -743,7 +798,7 @@ public final class GaplessFrameProvider extends AudioEventAdapter implements Pla
 
         long remaining = duration - Math.max(0L, Math.round(session.getPosition()));
 
-        if (remaining > preloadBeforeMs) {
+        if (remaining > preloadConfig.preloadBeforeMs()) {
             return;
         }
 
@@ -759,7 +814,7 @@ public final class GaplessFrameProvider extends AudioEventAdapter implements Pla
         PreparedTrack prepared = new PreparedTrack(
                 next,
                 standbyPlayer,
-                prebufferFrames
+                preloadConfig.prebufferFrames()
         );
 
         standbyPlayer.setFilterFactory(filterFactory);
@@ -784,7 +839,7 @@ public final class GaplessFrameProvider extends AudioEventAdapter implements Pla
         preparedTrack = prepared;
 
         try {
-            prepared.setFuture(preloadExecutor.submit(() -> pumpPreparedTrack(prepared)));
+            prepared.setFuture(preloadExecutor.submit(() -> preloadPump.pump(prepared)));
         } catch (RejectedExecutionException exception) {
             failedPreloadEntryId = next.getId();
             nextPreloadRetryAt = System.currentTimeMillis() + 2_000;
@@ -798,106 +853,13 @@ public final class GaplessFrameProvider extends AudioEventAdapter implements Pla
         }
     }
 
-    private void pumpPreparedTrack(PreparedTrack prepared) {
-        ByteBuffer preloadBuffer = ByteBuffer.allocate(
-                StandardAudioDataFormats.DISCORD_OPUS.maximumChunkSize()
-        );
-
-        MutableAudioFrame preloadFrame = new MutableAudioFrame();
-        preloadFrame.setBuffer(preloadBuffer);
-
-        long startedAt = System.currentTimeMillis();
-
-        long effectiveTimeoutMs = Math.min(
-                preloadLoadTimeoutMs,
-                Math.max(1_000, preloadBeforeMs - 500)
-        );
-
-        try {
-            while (prepared.isRunning()) {
-                long elapsed = System.currentTimeMillis() - startedAt;
-
-                if (elapsed >= effectiveTimeoutMs && prepared.getBuffer().isEmpty()) {
-                    synchronized (lock) {
-                        if (preparedTrack == prepared) {
-                            failedPreloadEntryId = prepared.getEntry().getId();
-                            nextPreloadRetryAt = System.currentTimeMillis() + 2_000;
-                            discardPreparedLocked();
-                        }
-                    }
-
-                    log.debug(
-                            "Preload timed out after {}ms for track {}. Falling back to normal playback.",
-                            elapsed,
-                            prepared.getEntry().getTrack().getInfo().uri
-                    );
-
-                    return;
-                }
-
-                preloadBuffer.clear();
-
-                boolean provided;
-
-                try {
-                    provided = prepared.getPlayer().provide(
-                            preloadFrame,
-                            500,
-                            TimeUnit.MILLISECONDS
-                    );
-                } catch (TimeoutException timeout) {
-                    if (prepared.getPlayer().getPlayingTrack() == null) {
-                        prepared.markFinished();
-                        return;
-                    }
-
-                    continue;
-                }
-
-                if (!provided) {
-                    if (prepared.getPlayer().getPlayingTrack() == null) {
-                        prepared.markFinished();
-                        return;
-                    }
-
-                    continue;
-                }
-
-                if (preloadFrame.isTerminator()) {
-                    prepared.markFinished();
-                    return;
-                }
-
-                byte[] data = preloadFrame.getData();
-
-                if (data == null || data.length == 0) {
-                    continue;
-                }
-
-                GaplessFrameData frameData = new GaplessFrameData(Arrays.copyOf(data, data.length));
-
-                while (prepared.isRunning()) {
-                    if (prepared.getBuffer().offer(frameData, 100, TimeUnit.MILLISECONDS)) {
-                        break;
-                    }
-                }
+    private void handlePreloadFailure(PreparedTrack prepared, long retryDelayMs) {
+        synchronized (lock) {
+            if (preparedTrack == prepared) {
+                failedPreloadEntryId = prepared.getEntry().getId();
+                nextPreloadRetryAt = System.currentTimeMillis() + Math.max(0L, retryDelayMs);
+                discardPreparedLocked();
             }
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-        } catch (Throwable throwable) {
-            synchronized (lock) {
-                if (preparedTrack == prepared) {
-                    failedPreloadEntryId = prepared.getEntry().getId();
-                    nextPreloadRetryAt = System.currentTimeMillis() + 2_000;
-                    discardPreparedLocked();
-                }
-            }
-
-            log.debug(
-                    "Failed to preload next track {}. Falling back to normal playback.",
-                    prepared.getEntry().getTrack().getInfo().uri,
-                    throwable
-            );
         }
     }
 
@@ -964,16 +926,40 @@ public final class GaplessFrameProvider extends AudioEventAdapter implements Pla
 
         if (currentEntry != null) {
             listener.onTrackEnd(session, track != null ? track : currentEntry.getTrack(), reason);
-
-            if (reason == AudioTrackEndReason.FINISHED) {
-                queue.addToHistory(currentEntry.copyWithPosition(0));
-            }
+            handleFinishedEntryLoopLocked(currentEntry, reason);
         }
 
         currentEntry = null;
         clearActiveTrackLocked();
         session.resetPosition();
         clearActiveEndLocked();
+    }
+
+    private boolean emitQueueEndLocked() {
+        if (queueEndEmitted) {
+            return false;
+        }
+
+        queueEndEmitted = true;
+        listener.onQueueUpdate(session);
+        listener.onQueueEnd(session);
+
+        if (session.isQueueLoop() && queue.moveHistoryToQueueFromStart()) {
+            queueEndEmitted = false;
+            listener.onQueueUpdate(session);
+            startNextLocked();
+            return true;
+        }
+
+        return false;
+    }
+
+    private void handleFinishedEntryLoopLocked(QueueEntry entry, AudioTrackEndReason reason) {
+        if (entry == null || reason != AudioTrackEndReason.FINISHED || session.isTrackLoop()) {
+            return;
+        }
+
+        queue.addToHistory(entry.copyWithPosition(0));
     }
 
     private void bindActiveTrackLocked(AudioTrack track) {

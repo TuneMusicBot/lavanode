@@ -15,11 +15,23 @@ public interface PlayerFrameProvider {
 
     void enqueue(QueueEntry entry);
 
+    /**
+     * Immediately replaces the current playing track with the provided entry.
+     *
+     * The currently audible entry, when present, must be moved to history and
+     * ended with STOPPED. The forced entry then becomes the current track and
+     * will be moved to history normally when it finishes.
+     */
+    void play(QueueEntry entry);
+
     void skip();
 
     void previous();
 
     boolean seek(long positionMs);
+
+    default void onLoopOptionsUpdated() {
+    }
 
     QueueEntry removeQueuedEntry(String entryId);
 

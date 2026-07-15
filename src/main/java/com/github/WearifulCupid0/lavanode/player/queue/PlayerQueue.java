@@ -150,6 +150,28 @@ public final class PlayerQueue {
         return List.copyOf(history);
     }
 
+    /**
+     * Moves the whole playback history back to the pending queue, preserving
+     * the original playback order and resetting every track position to 0.
+     *
+     * Used by queue loop when the queue naturally reaches the end: after the
+     * queueEnd event is emitted, the old history becomes the next queue cycle.
+     */
+    public synchronized boolean moveHistoryToQueueFromStart() {
+        if (history.isEmpty()) {
+            return false;
+        }
+
+        List<QueueEntry> entries = new ArrayList<>(history);
+        history.clear();
+
+        for (QueueEntry entry : entries) {
+            queue.addLast(entry.copyWithPosition(0));
+        }
+
+        return true;
+    }
+
     public synchronized List<QueueEntry> snapshot() {
         return List.copyOf(queue);
     }
