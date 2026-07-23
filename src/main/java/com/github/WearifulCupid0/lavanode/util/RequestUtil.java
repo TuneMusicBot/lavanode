@@ -80,7 +80,8 @@ public class RequestUtil {
                 .put("creator", playlist.getCreator())
                 .put("artworkUrl", playlist.getImage())
                 .put("type", playlist.getType())
-                .put("uri", playlist.getURI());
+                .put("uri", playlist.getURI())
+                .put("size", playlist.getSize());
 
         List<AudioTrack> playlistTracks = playlist.getTracks();
         JsonArray tracks = new JsonArray();

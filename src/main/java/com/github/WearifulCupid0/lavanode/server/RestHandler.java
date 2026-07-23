@@ -16,6 +16,7 @@ import com.sedmelluq.discord.lavaplayer.player.AudioLoadResultHandler;
 import com.sedmelluq.discord.lavaplayer.player.AudioPlayerManager;
 import com.sedmelluq.discord.lavaplayer.tools.FriendlyException;
 import com.sedmelluq.discord.lavaplayer.track.AudioPlaylist;
+import com.sedmelluq.discord.lavaplayer.track.AudioReference;
 import com.sedmelluq.discord.lavaplayer.track.AudioTrack;
 import com.sedmelluq.lavaplayer.extensions.thirdpartysources.SourceTools;
 import io.vertx.core.Future;
@@ -67,10 +68,6 @@ public class RestHandler {
 
         router.get("/ping").handler(context -> context.response().setStatusCode(204).send());
 
-        router.get("/test-error").handler(context -> {
-            throw new RuntimeException("Erro de teste");
-        });
-
         router.route("/v1/*").handler(JWTAuthHandler.create(jwtAuth));
         router.route("/v1/*").handler(new JWTUserHandler());
 
@@ -96,7 +93,20 @@ public class RestHandler {
                 return;
             }
 
-            loadTracks(identifier, main)
+            List<String> playlistLoadLimits = context.queryParam("playlistLoadLimit");
+            String playlistLoadLimit = playlistLoadLimits.isEmpty() ? null : playlistLoadLimits.get(0);
+
+            List<String> playlistOffsets = context.queryParam("playlistOffset");
+            String playlistOffset = playlistOffsets.isEmpty() ? null : playlistOffsets.get(0);
+
+            List<String> countryCodes = context.queryParam("countryCode");
+            String countryCode = countryCodes.isEmpty() ? null : countryCodes.get(0);
+
+            if (SourceTools.isBlank(countryCode)) countryCode = "US";
+
+            AudioReference reference = new AudioReference(identifier.trim(), null, getIntOrDefault(playlistLoadLimit, 5), getIntOrDefault(playlistOffset, 0), countryCode);
+
+            loadTracks(reference, main)
                     .thenAccept(json -> context.response().setStatusCode(200).send(json.toBuffer()));
         });
 
@@ -525,6 +535,14 @@ public class RestHandler {
         return null;
     }
 
+    private static int getIntOrDefault(String input, int def) {
+        try {
+            return Integer.parseInt(input);
+        } catch (Exception e) {
+            return def;
+        }
+    }
+
     private static PlayerSessionManager getPlayerSession(RoutingContext context, Main main) {
         return getPlayerSession((String) context.get("user-id"), main);
     }
@@ -533,13 +551,13 @@ public class RestHandler {
         return main.getPlayerManager().getOrCreate(userId);
     }
 
-    private static CompletionStage<JsonObject> loadTracks(String identifier, Main main) {
+    private static CompletionStage<JsonObject> loadTracks(AudioReference identifier, Main main) {
         return loadTracks(identifier, main.getAudioPlayerManager());
     }
 
-    private static CompletionStage<JsonObject> loadTracks(String identifier, AudioPlayerManager playerManager) {
+    private static CompletionStage<JsonObject> loadTracks(AudioReference identifier, AudioPlayerManager playerManager) {
         CompletableFuture<JsonObject> future = new CompletableFuture<>();
-        playerManager.loadItem(identifier.trim(),
+        playerManager.loadItem(identifier,
                 new AudioLoadResultHandler() {
                     @Override
                     public void trackLoaded(AudioTrack track) {

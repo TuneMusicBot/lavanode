@@ -24,12 +24,13 @@ import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 
 public final class PlayerSession {
-    private static final long GAPLESS_PRELOAD_BEFORE_MS = Main.TRACK_STUCK_THRESHOLD;
-    private static final int GAPLESS_PREBUFFER_FRAMES = 100;
-    private static final long GAPLESS_PRELOAD_TIMEOUT_MS = 15_000;
+    private static final long GAPLESS_PRELOAD_BEFORE_MS = getLongSetting("GAPLESS_PRELOAD_BEFORE_MS", 1_000L, 100L, Main.TRACK_STUCK_THRESHOLD);
+    private static final int GAPLESS_PREBUFFER_FRAMES = getIntSetting("GAPLESS_PREBUFFER_FRAMES", 15, 3, 50);
+    private static final long GAPLESS_PRELOAD_TIMEOUT_MS = getLongSetting("GAPLESS_PRELOAD_TIMEOUT_MS", 5_000L, 1_000L, Main.TRACK_STUCK_THRESHOLD);
 
-    private static final long CROSSFADE_DURATION_MS = 15_000;
-    private static final long CROSSFADE_PRELOAD_LEAD_MS = Main.TRACK_STUCK_THRESHOLD;
+    private static final long CROSSFADE_DURATION_MS = getLongSetting("CROSSFADE_DURATION_MS", 3_000L, 20L, 15_000L);
+    private static final long CROSSFADE_PRELOAD_LEAD_MS = getLongSetting("CROSSFADE_PRELOAD_LEAD_MS", 1_000L, 0L, Main.TRACK_STUCK_THRESHOLD);
+    private static final int CROSSFADE_OPUS_QUALITY = getIntSetting("CROSSFADE_OPUS_QUALITY", 6, 0, 10);
 
     private final Object lock = new Object();
 
@@ -43,6 +44,9 @@ public final class PlayerSession {
     private final PlayerFilters playerFilters = new PlayerFilters();
     private final PlayerFrameLossCounter playerFrameLossCounter = new PlayerFrameLossCounter();
 
+    private boolean disconnected = true;
+    private Long disconnectedAt = System.currentTimeMillis();
+
     //For Gapless and Crossfade frame providers
     private final ExecutorService preloadExecutor;
 
@@ -53,6 +57,47 @@ public final class PlayerSession {
     private volatile double realPosition = 0.0;
     private volatile boolean trackLoop;
     private volatile boolean queueLoop;
+
+
+    private static long getLongSetting(String name, long defaultValue, long minValue, long maxValue) {
+        String value = getSetting(name);
+
+        if (value == null || value.isBlank()) {
+            return defaultValue;
+        }
+
+        try {
+            long parsed = Long.parseLong(value.trim());
+            return Math.max(minValue, Math.min(maxValue, parsed));
+        } catch (NumberFormatException ignored) {
+            return defaultValue;
+        }
+    }
+
+    private static int getIntSetting(String name, int defaultValue, int minValue, int maxValue) {
+        String value = getSetting(name);
+
+        if (value == null || value.isBlank()) {
+            return defaultValue;
+        }
+
+        try {
+            int parsed = Integer.parseInt(value.trim());
+            return Math.max(minValue, Math.min(maxValue, parsed));
+        } catch (NumberFormatException ignored) {
+            return defaultValue;
+        }
+    }
+
+    private static String getSetting(String name) {
+        String property = System.getProperty(name);
+
+        if (property != null && !property.isBlank()) {
+            return property;
+        }
+
+        return System.getenv(name);
+    }
 
     public PlayerSession(
             String id,
@@ -148,7 +193,8 @@ public final class PlayerSession {
                     listener,
                     sessionManager.getPcmAudioPlayerManager(),
                     CROSSFADE_DURATION_MS,
-                    CROSSFADE_PRELOAD_LEAD_MS
+                    CROSSFADE_PRELOAD_LEAD_MS,
+                    CROSSFADE_OPUS_QUALITY
             );
         };
     }
@@ -213,6 +259,24 @@ public final class PlayerSession {
 
     public PlayerQueue getQueue() {
         return queue;
+    }
+
+    public boolean shouldBeDeleted() {
+        if (this.disconnected) {
+            long now = System.currentTimeMillis();
+            return (this.disconnectedAt + 30_000) <= now;
+        }
+        return false;
+    }
+
+    public void setConnected() {
+        this.disconnectedAt = null;
+        this.disconnected = false;
+    }
+
+    public void setDisconnected() {
+        this.disconnectedAt = System.currentTimeMillis();
+        this.disconnected = true;
     }
 
     public boolean isTrackLoop() {

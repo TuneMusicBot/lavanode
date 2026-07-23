@@ -24,11 +24,15 @@ public class KoeEventHandler extends KoeEventAdapter {
 
     @Override
     public void gatewayReady(InetSocketAddress address, int ssrc) {
+        log.debug("Websocket ready with ssrc {}, Player ID {}", ssrc, playerSession.getId());
+        playerSession.setConnected();
         playerSession.getListener().onGatewayReady(playerSession, address, ssrc);
     }
 
     @Override
     public void gatewayClosed(int code, String reason, boolean byRemote) {
+        log.debug("Websocket closed with code {} and reason {}, Player ID {}", code, reason, playerSession.getId());
+        playerSession.setDisconnected();
         playerSession.getListener().onGatewayClosed(playerSession, code, reason, byRemote);
     }
 }

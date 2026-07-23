@@ -7,7 +7,7 @@ public final class GaplessPreloadConfig {
 
     public GaplessPreloadConfig(long preloadBeforeMs, int prebufferFrames, long preloadLoadTimeoutMs) {
         this.preloadBeforeMs = Math.max(0L, preloadBeforeMs);
-        this.prebufferFrames = Math.max(1, prebufferFrames);
+        this.prebufferFrames = Math.max(1, Math.min(50, prebufferFrames));
         this.preloadLoadTimeoutMs = Math.max(1L, preloadLoadTimeoutMs);
     }
 

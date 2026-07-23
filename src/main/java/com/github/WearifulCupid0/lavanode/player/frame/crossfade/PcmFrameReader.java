@@ -4,6 +4,7 @@ import com.sedmelluq.discord.lavaplayer.player.AudioPlayer;
 import com.sedmelluq.discord.lavaplayer.track.playback.MutableAudioFrame;
 
 import java.nio.ByteBuffer;
+import java.nio.ShortBuffer;
 import java.util.Arrays;
 
 final class PcmFrameReader {
@@ -36,12 +37,8 @@ final class PcmFrameReader {
     private static void decodeS16Be(ByteBuffer bytes, int length, short[] samples) {
         int sampleCount = Math.min(samples.length, length / Short.BYTES);
 
-        for (int i = 0; i < sampleCount; i++) {
-            int high = bytes.get() & 0xFF;
-            int low = bytes.get() & 0xFF;
-
-            samples[i] = (short) ((high << 8) | low);
-        }
+        ShortBuffer shortBuffer = bytes.asShortBuffer();
+        shortBuffer.get(samples, 0, sampleCount);
 
         if (sampleCount < samples.length) {
             Arrays.fill(samples, sampleCount, samples.length, (short) 0);

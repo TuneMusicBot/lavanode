@@ -7,9 +7,12 @@ import com.sedmelluq.lavaplayer.extensions.thirdpartysources.SourceTools;
 import com.sedmelluq.lavaplayer.extensions.thirdpartysources.applemusic.AppleMusicAudioSourceManager;
 import com.sedmelluq.lavaplayer.extensions.thirdpartysources.deezer.DeezerAudioSourceManager;
 import com.sedmelluq.lavaplayer.extensions.thirdpartysources.pandora.PandoraAudioSourceManager;
+import com.sedmelluq.lavaplayer.extensions.thirdpartysources.source.DefaultThirdPartyAudioTrackResolver;
 import com.sedmelluq.lavaplayer.extensions.thirdpartysources.spotify.SpotifyAudioSourceManager;
 import com.sedmelluq.lavaplayer.extensions.thirdpartysources.tidal.TidalAudioSourceManager;
+import com.sedmelluq.lavaplayer.source.audiomack.AudiomackAudioSourceManager;
 import com.sedmelluq.lavaplayer.source.bandcamp.BandcampAudioSourceManager;
+import com.sedmelluq.lavaplayer.source.bandlab.BandlabAudioSourceManager;
 import com.sedmelluq.lavaplayer.source.clyp.ClypAudioSourceManager;
 import com.sedmelluq.lavaplayer.source.iheart.iHeartAudioSourceManager;
 import com.sedmelluq.lavaplayer.source.jamendo.JamendoAudioSourceManager;
@@ -52,6 +55,12 @@ public class AudioSourceConfig {
 
     public static void loadNativeSourceManagers() {
         try {
+            managers.add(new AudiomackAudioSourceManager());
+            log.debug("Audiomack audio source manager registered!");
+
+            managers.add(new BandlabAudioSourceManager());
+            log.debug("Bandlab audio source manager registered!");
+
             managers.add(new BandcampAudioSourceManager());
             log.debug("Bandcamp audio source manager registered!");
 
@@ -122,7 +131,7 @@ public class AudioSourceConfig {
             managers.add(new AppleMusicAudioSourceManager(playerManager));
             log.debug("AppleMusic audio source manager registered!");
 
-            managers.add(new DeezerAudioSourceManager(playerManager, SourceTools.getPropertyOrEnv("DEEZER_MASTER_KEY"), SourceTools.getPropertyOrEnv("DEEZER_ARL")));
+            managers.add(new DeezerAudioSourceManager(SourceTools.getPropertyOrEnv("DEEZER_MASTER_KEY"), SourceTools.getPropertyOrEnv("DEEZER_ARL")));
             log.debug("Deezer audio source manager registered!");
 
             managers.add(new PandoraAudioSourceManager(playerManager));
@@ -131,7 +140,7 @@ public class AudioSourceConfig {
             managers.add(new SpotifyAudioSourceManager(playerManager));
             log.debug("Spotify audio source manager registered!");
 
-            managers.add(new TidalAudioSourceManager(playerManager, SourceTools.getPropertyOrEnv("TIDAL_CLIENT_ID"), SourceTools.getPropertyOrEnv("TIDAL_CLIENT_SECRET")));
+            managers.add(new TidalAudioSourceManager(new DefaultThirdPartyAudioTrackResolver(), playerManager, SourceTools.getPropertyOrEnv("TIDAL_CLIENT_ID"), SourceTools.getPropertyOrEnv("TIDAL_CLIENT_SECRET")));
             log.debug("TIDAL audio source manager registered!");
         } catch (Exception e) {
             log.error("Failed to load third party/non-native audio source managers: ", e);

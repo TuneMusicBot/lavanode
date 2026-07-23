@@ -164,6 +164,11 @@ public class Main {
         vertx.setPeriodic(500, timerId -> {
             for (PlayerSessionManager sessionManager : playerManager.getAll()) {
                 for (PlayerSession session : sessionManager.getAll()) {
+                    if (session.shouldBeDeleted()) {
+                        log.debug("Deleting player {} from user {} because it's disconected for over 30s", session.getId(), sessionManager.getUserId());
+                        sessionManager.destroy(session.getId());
+                        return;
+                    }
                     PlayerFrameProvider frameProvider = session.getFrameProvider();
                     if (frameProvider instanceof GaplessFrameProvider)
                         ((GaplessFrameProvider) frameProvider).tick();

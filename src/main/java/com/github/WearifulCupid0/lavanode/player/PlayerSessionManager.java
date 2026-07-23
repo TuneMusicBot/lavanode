@@ -125,6 +125,8 @@ public final class PlayerSessionManager {
 
     public void connectVoiceChannel(String guildId, VoiceServerInfo serverInfo) {
         PlayerSession playerSession = getOrCreate(guildId);
+        koe.destroyConnection(parseDiscordId(guildId, "guildId"));
+
         MediaConnection mediaConnection = getConnection(playerSession);
 
         mediaConnection.connect(serverInfo);

@@ -23,9 +23,13 @@ final class PcmToOpusEncoder implements AutoCloseable {
 
     private final byte[] opusBytes = new byte[CrossfadeAudio.OPUS_FORMAT.maximumChunkSize()];
 
-    PcmToOpusEncoder(AudioConfiguration baseConfiguration) {
+    PcmToOpusEncoder(AudioConfiguration baseConfiguration, int opusEncodingQuality) {
         AudioConfiguration opusConfiguration = baseConfiguration.copy();
         opusConfiguration.setOutputFormat(CrossfadeAudio.OPUS_FORMAT);
+
+        if (opusEncodingQuality >= 0) {
+            opusConfiguration.setOpusEncodingQuality(Math.max(0, Math.min(10, opusEncodingQuality)));
+        }
 
         this.encoder = CrossfadeAudio.OPUS_FORMAT.createEncoder(opusConfiguration);
     }
@@ -37,11 +41,6 @@ final class PcmToOpusEncoder implements AutoCloseable {
 
         opusOutput.clear();
 
-        /*
-         * Importante: encode(input, output) não retorna os bytes. Ele grava dentro
-         * do output. Algumas versões já deixam o ByteBuffer em modo leitura; outras
-         * deixam position = tamanho escrito. Este ajuste aceita os dois comportamentos.
-         */
         encoder.encode(encoderInput, opusOutput);
 
         if (opusOutput.position() > 0) {

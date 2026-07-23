@@ -37,10 +37,10 @@ public final class CrossfadeFrameProvider extends AudioEventAdapter implements P
     private final PcmFrameReader activeReader = new PcmFrameReader();
     private final PcmFrameReader incomingReader = new PcmFrameReader();
     private final PcmToOpusEncoder opusEncoder;
-    private final PcmCrossfadeMixer mixer = new PcmCrossfadeMixer();
+    private final PcmCrossfadeMixer mixer;
 
     private final PcmFrameBuffer incomingBuffer;
-    private final PcmFrameBuffer activeBufferedFrames = new PcmFrameBuffer(Integer.MAX_VALUE);
+    private final PcmFrameBuffer activeBufferedFrames;
 
     private final short[] activeSamples = new short[CrossfadeAudio.SAMPLE_COUNT];
     private final short[] incomingSamples = new short[CrossfadeAudio.SAMPLE_COUNT];
@@ -76,11 +76,6 @@ public final class CrossfadeFrameProvider extends AudioEventAdapter implements P
     private boolean crossfading;
     private int crossfadeFrameIndex;
 
-    /*
-     * Posição audível da música que está entrando.
-     * Não use incomingPlayer.getPlayingTrack().getPosition() para isso, pois o
-     * incomingPlayer pode estar adiantado por causa do preload.
-     */
     private double incomingAudiblePosition;
 
     public CrossfadeFrameProvider(
@@ -88,13 +83,16 @@ public final class CrossfadeFrameProvider extends AudioEventAdapter implements P
             PlayerEventListener listener,
             AudioPlayerManager pcmPlayerManager,
             long crossfadeMs,
-            long preloadLeadMs
+            long preloadLeadMs,
+            int opusEncodingQuality
     ) {
         this.session = session;
         this.queue = session.getQueue();
         this.listener = listener;
         this.config = new CrossfadeConfig(crossfadeMs, preloadLeadMs);
         this.incomingBuffer = new PcmFrameBuffer(config.incomingBufferLimitFrames());
+        this.activeBufferedFrames = new PcmFrameBuffer(config.incomingBufferLimitFrames());
+        this.mixer = new PcmCrossfadeMixer(config.crossfadeFrameCount());
 
         this.activePlayer = pcmPlayerManager.createPlayer();
         this.incomingPlayer = pcmPlayerManager.createPlayer();
@@ -102,7 +100,7 @@ public final class CrossfadeFrameProvider extends AudioEventAdapter implements P
         this.activePlayer.addListener(this);
         this.incomingPlayer.addListener(this);
 
-        this.opusEncoder = new PcmToOpusEncoder(pcmPlayerManager.getConfiguration());
+        this.opusEncoder = new PcmToOpusEncoder(pcmPlayerManager.getConfiguration(), opusEncodingQuality);
     }
 
     @Override
