@@ -15,34 +15,33 @@ import java.util.Objects;
 import java.util.Random;
 
 public final class PlayerQueue {
-    private static final int DEFAULT_MAX_HISTORY_SIZE = 100;
 
     private final Deque<QueueEntry> queue = new ArrayDeque<>();
     private final Deque<QueueEntry> history = new ArrayDeque<>();
+    private final int maxQueueSize;
     private final int maxHistorySize;
 
-    public PlayerQueue() {
-        this(DEFAULT_MAX_HISTORY_SIZE);
-    }
-
-    public PlayerQueue(int maxHistorySize) {
-        this.maxHistorySize = Math.max(0, maxHistorySize);
+    public PlayerQueue(int maxQueueSize, int maxHistorySize) {
+        this.maxQueueSize = maxQueueSize;
+        this.maxHistorySize = maxHistorySize;
     }
 
     public synchronized void add(QueueEntry entry) {
-        queue.addLast(Objects.requireNonNull(entry, "entry"));
+        if (maxQueueSize <= -1 || maxQueueSize > queue.size())
+            queue.addLast(Objects.requireNonNull(entry, "entry"));
     }
 
     public synchronized void addFirst(QueueEntry entry) {
-        queue.addFirst(Objects.requireNonNull(entry, "entry"));
+        if (maxQueueSize <= -1 || maxQueueSize > queue.size())
+            queue.addFirst(Objects.requireNonNull(entry, "entry"));
     }
 
     public synchronized void addAll(Collection<QueueEntry> entries) {
         Objects.requireNonNull(entries, "entries");
 
-        for (QueueEntry entry : entries) {
-            queue.addLast(Objects.requireNonNull(entry, "entry"));
-        }
+        for (QueueEntry entry : entries)
+            if (maxQueueSize <= -1 || maxQueueSize > queue.size())
+                queue.addLast(Objects.requireNonNull(entry, "entry"));
     }
 
     public synchronized QueueEntry poll() {
@@ -129,8 +128,10 @@ public final class PlayerQueue {
 
         history.addLast(entry);
 
-        while (history.size() > maxHistorySize) {
-            history.pollFirst();
+        if (maxHistorySize > -1) {
+            while (history.size() > maxHistorySize) {
+                history.pollFirst();
+            }
         }
     }
 

@@ -29,7 +29,7 @@ final class GaplessPreloadPump {
 
     void pump(PreparedTrack prepared) {
         ByteBuffer preloadBuffer = ByteBuffer.allocate(
-                StandardAudioDataFormats.DISCORD_OPUS.maximumChunkSize()
+                StandardAudioDataFormats.DISCORD_PCM_S16_BE.maximumChunkSize()
         );
 
         MutableAudioFrame preloadFrame = new MutableAudioFrame();

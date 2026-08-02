@@ -31,9 +31,9 @@ public class PlayerManager {
         return this.sessionMap.computeIfAbsent(normalizedUserId, id ->
                 new PlayerSessionManager(
                         this.main.getAudioPlayerManager(),
-                        this.main.getPcmAudioPlayerManager(),
                         new PlayerSessionEventListener(this),
-                        this.main.getKoe().newClient(parsedUserId)
+                        this.main.getKoe().newClient(parsedUserId),
+                        this.main.getStreamTokenManager()
                 )
         );
     }

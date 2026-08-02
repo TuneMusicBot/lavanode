@@ -1,105 +1,196 @@
 package com.github.WearifulCupid0.lavanode.player;
 
-import com.github.WearifulCupid0.lavanode.player.voice.KoeEventHandler;
-import com.github.WearifulCupid0.lavanode.player.voice.PlayerProvider;
+import com.github.WearifulCupid0.lavanode.player.connections.PlayerConnection;
+import com.github.WearifulCupid0.lavanode.player.connections.discord.DiscordPlayerConnection;
+import com.github.WearifulCupid0.lavanode.player.connections.http.StreamTokenManager;
 import com.sedmelluq.discord.lavaplayer.player.AudioPlayerManager;
 import io.vertx.core.json.JsonArray;
 import moe.kyokobot.koe.KoeClient;
-import moe.kyokobot.koe.MediaConnection;
 import moe.kyokobot.koe.VoiceServerInfo;
 
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/** Owns all independent players created by one authenticated bot/user. */
 public final class PlayerSessionManager {
     private final AudioPlayerManager audioPlayerManager;
-    private final AudioPlayerManager pcmAudioPlayerManager;
     private final PlayerEventListener listener;
     private final Map<String, PlayerSession> players = new ConcurrentHashMap<>();
+    private final Map<String, PlayerSession> playersByConnectionId = new ConcurrentHashMap<>();
+    private final Map<String, String> connectionByGuildId = new ConcurrentHashMap<>();
     private final KoeClient koe;
+    private final StreamTokenManager streamTokenManager;
 
     private final ExecutorService preloadExecutor = Executors.newFixedThreadPool(
             Math.max(2, Runtime.getRuntime().availableProcessors()),
             new NamedDaemonThreadFactory("lavanode-preload")
     );
 
+    private final ScheduledExecutorService frameDispatchExecutor = Executors.newScheduledThreadPool(
+            Math.max(2, Runtime.getRuntime().availableProcessors() / 2),
+            new NamedDaemonThreadFactory("lavanode-frame-dispatch")
+    );
+
     public PlayerSessionManager(
             AudioPlayerManager audioPlayerManager,
-            AudioPlayerManager pcmAudioPlayerManager,
             PlayerEventListener listener,
-            KoeClient koe
+            KoeClient koe,
+            StreamTokenManager streamTokenManager
     ) {
         this.audioPlayerManager = audioPlayerManager;
-        this.pcmAudioPlayerManager = pcmAudioPlayerManager;
         this.listener = listener;
         this.koe = koe;
+        this.streamTokenManager = streamTokenManager;
+    }
+
+    public PlayerSession create(PlayerSettings settings) {
+        String id;
+        do {
+            id = UUID.randomUUID().toString();
+        } while (players.containsKey(id));
+
+        PlayerSession session = new PlayerSession(
+                id,
+                getUserId(),
+                this,
+                listener,
+                preloadExecutor,
+                frameDispatchExecutor,
+                streamTokenManager,
+                settings
+        );
+
+        players.put(id, session);
+        return session;
     }
 
     public List<PlayerSession> getPlayersSnapshot() {
-        return List.copyOf(this.players.values());
+        return List.copyOf(players.values());
     }
 
     public AudioPlayerManager getAudioPlayerManager() {
         return audioPlayerManager;
     }
 
-    public AudioPlayerManager getPcmAudioPlayerManager() {
-        return pcmAudioPlayerManager;
-    }
-
-    public PlayerSession getOrCreate(String guildId) {
-        String normalizedGuildId = Long.toString(parseDiscordId(guildId, "guildId"));
-
-        return players.computeIfAbsent(normalizedGuildId, id ->
-                new PlayerSession(id, getUserId(), this, listener, preloadExecutor)
-        );
+    public KoeClient getKoe() {
+        return koe;
     }
 
     public String getUserId() {
-        return Long.toString(this.koe.getClientId());
+        return Long.toString(koe.getClientId());
     }
 
-    public PlayerSession get(String guildId) {
-        return players.get(Long.toString(parseDiscordId(guildId, "guildId")));
+    public PlayerSession get(String playerId) {
+        return playerId == null ? null : players.get(playerId);
     }
 
-    public boolean exists(String guildId) {
-        return players.containsKey(Long.toString(parseDiscordId(guildId, "guildId")));
+    public boolean exists(String playerId) {
+        return playerId != null && players.containsKey(playerId);
     }
 
-    public void destroy(long guildId) {
-        destroy(Long.toString(guildId));
+    public PlayerSession findByConnectionId(String connectionId) {
+        return connectionId == null ? null : playersByConnectionId.get(connectionId);
     }
 
-    public void destroy(String guildId) {
+    public PlayerSession findByGuildId(String guildId) {
+        String normalizedGuildId = normalizeDiscordId(guildId, "guildId");
+        String connectionId = connectionByGuildId.get(normalizedGuildId);
+        return connectionId == null ? null : playersByConnectionId.get(connectionId);
+    }
+
+    public DiscordPlayerConnection createDiscordConnection(
+            PlayerSession player,
+            String guildId,
+            String channelId,
+            String endpoint,
+            VoiceServerInfo serverInfo
+    ) {
+        if (player == null || player.isDestroyed()) {
+            throw new IllegalStateException("Player is no longer available");
+        }
+
         long parsedGuildId = parseDiscordId(guildId, "guildId");
-        String normalizedGuildId = Long.toString(parsedGuildId);
+        long parsedChannelId = parseDiscordId(channelId, "channelId");
+        String normalizedGuildId = Long.toUnsignedString(parsedGuildId);
 
-        PlayerSession session = players.remove(normalizedGuildId);
+        if (connectionByGuildId.containsKey(normalizedGuildId)) {
+            throw new IllegalStateException("A Discord connection already exists for guild " + normalizedGuildId);
+        }
+
+        DiscordPlayerConnection connection = new DiscordPlayerConnection(
+                player,
+                this,
+                parsedGuildId,
+                parsedChannelId,
+                endpoint,
+                serverInfo
+        );
+
+        player.registerConnection(connection);
+
+        try {
+            connection.connect();
+        } catch (RuntimeException exception) {
+            player.notifyConnectionError(connection, exception);
+            connection.disconnect("connectFailed");
+            player.unregisterConnection(connection, "connectFailed");
+            throw exception;
+        }
+
+        return connection;
+    }
+
+    public void indexConnection(PlayerSession player, PlayerConnection connection) {
+        PlayerSession previous = playersByConnectionId.putIfAbsent(connection.getId(), player);
+        if (previous != null) {
+            throw new IllegalStateException("Connection id already belongs to a player: " + connection.getId());
+        }
+
+        if (connection instanceof DiscordPlayerConnection discord) {
+            String existing = connectionByGuildId.putIfAbsent(discord.getGuildId(), connection.getId());
+            if (existing != null) {
+                playersByConnectionId.remove(connection.getId(), player);
+                throw new IllegalStateException("A Discord connection already exists for guild " + discord.getGuildId());
+            }
+        }
+    }
+
+    public void unindexConnection(PlayerSession player, PlayerConnection connection) {
+        playersByConnectionId.remove(connection.getId(), player);
+
+        if (connection instanceof DiscordPlayerConnection discord) {
+            connectionByGuildId.remove(discord.getGuildId(), connection.getId());
+        }
+    }
+
+    public void destroy(String playerId) {
+        PlayerSession session = players.remove(playerId);
 
         if (session != null) {
             session.destroy();
-
             listener.onPlayerDestroy(session);
         }
-
-        koe.destroyConnection(parsedGuildId);
     }
 
     public void shutdown() {
-        for (PlayerSession session : this.getAll()) {
+        for (PlayerSession session : getPlayersSnapshot()) {
             destroy(session.getId());
         }
 
         players.clear();
+        playersByConnectionId.clear();
+        connectionByGuildId.clear();
         preloadExecutor.shutdownNow();
-        this.koe.close();
+        frameDispatchExecutor.shutdownNow();
+        koe.close();
     }
 
     public Collection<PlayerSession> getAll() {
@@ -110,34 +201,38 @@ public final class PlayerSessionManager {
         return players.size();
     }
 
-    public MediaConnection getConnection(PlayerSession playerSession) {
-        long guildId = parseDiscordId(playerSession.getId(), "guildId");
-        MediaConnection mediaConnection = koe.getConnection(guildId);
+    public JsonArray toJson(String guildId, String connectionId) {
+        JsonArray json = new JsonArray();
 
-        if (mediaConnection == null) {
-            mediaConnection = koe.createConnection(guildId);
-            mediaConnection.registerListener(new KoeEventHandler(playerSession));
-            mediaConnection.setAudioSender(new PlayerProvider(playerSession));
+        if (connectionId != null && !connectionId.isBlank()) {
+            PlayerSession player = findByConnectionId(connectionId);
+            if (player != null) {
+                json.add(player.toJson(audioPlayerManager));
+            }
+            return json;
         }
 
-        return mediaConnection;
-    }
+        if (guildId != null && !guildId.isBlank()) {
+            PlayerSession player = findByGuildId(guildId);
+            if (player != null) {
+                json.add(player.toJson(audioPlayerManager));
+            }
+            return json;
+        }
 
-    public void connectVoiceChannel(String guildId, VoiceServerInfo serverInfo) {
-        PlayerSession playerSession = getOrCreate(guildId);
-        koe.destroyConnection(parseDiscordId(guildId, "guildId"));
+        for (PlayerSession player : getAll()) {
+            json.add(player.toJson(audioPlayerManager));
+        }
 
-        MediaConnection mediaConnection = getConnection(playerSession);
-
-        mediaConnection.connect(serverInfo);
+        return json;
     }
 
     public JsonArray toJson() {
-        JsonArray json = new JsonArray();
-        for (PlayerSession playerSession : getAll()) {
-            json.add(playerSession.toJson(audioPlayerManager));
-        }
-        return json;
+        return toJson(null, null);
+    }
+
+    private static String normalizeDiscordId(String value, String fieldName) {
+        return Long.toUnsignedString(parseDiscordId(value, fieldName));
     }
 
     private static long parseDiscordId(String value, String fieldName) {
@@ -146,7 +241,7 @@ public final class PlayerSessionManager {
         }
 
         try {
-            return Long.parseLong(value);
+            return Long.parseUnsignedLong(value);
         } catch (NumberFormatException exception) {
             throw new IllegalArgumentException("Invalid Discord " + fieldName + ": " + value, exception);
         }

@@ -9,8 +9,9 @@ import com.github.WearifulCupid0.lavanode.server.auth.JWTAuthFactory;
 import com.github.WearifulCupid0.lavanode.server.auth.JWTUserHandler;
 import com.github.WearifulCupid0.lavanode.server.handlers.JsonBodyHandler;
 import com.github.WearifulCupid0.lavanode.server.handlers.PlayerSessionHandler;
-import com.github.WearifulCupid0.lavanode.server.handlers.GuildIdHandler;
+import com.github.WearifulCupid0.lavanode.server.handlers.PlayerIdHandler;
 import com.github.WearifulCupid0.lavanode.server.handlers.RestFailureHandler;
+import com.github.WearifulCupid0.lavanode.player.connections.http.PlayerStreamHandler;
 import com.github.WearifulCupid0.lavanode.util.RequestUtil;
 import com.sedmelluq.discord.lavaplayer.player.AudioLoadResultHandler;
 import com.sedmelluq.discord.lavaplayer.player.AudioPlayerManager;
@@ -19,11 +20,7 @@ import com.sedmelluq.discord.lavaplayer.track.AudioPlaylist;
 import com.sedmelluq.discord.lavaplayer.track.AudioReference;
 import com.sedmelluq.discord.lavaplayer.track.AudioTrack;
 import com.sedmelluq.lavaplayer.extensions.thirdpartysources.SourceTools;
-import io.vertx.core.Future;
-import io.vertx.core.Handler;
 import io.vertx.core.http.HttpMethod;
-import io.vertx.core.http.HttpServerRequest;
-import io.vertx.core.http.ServerWebSocket;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.auth.jwt.JWTAuth;
@@ -32,6 +29,9 @@ import io.vertx.ext.web.RoutingContext;
 import io.vertx.ext.web.handler.BodyHandler;
 import io.vertx.ext.web.handler.JWTAuthHandler;
 import moe.kyokobot.koe.VoiceServerInfo;
+import com.github.WearifulCupid0.lavanode.player.connections.ConnectionType;
+import com.github.WearifulCupid0.lavanode.player.connections.PlayerConnection;
+import com.github.WearifulCupid0.lavanode.player.connections.discord.DiscordPlayerConnection;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -68,19 +68,25 @@ public class RestHandler {
 
         router.get("/ping").handler(context -> context.response().setStatusCode(204).send());
 
+        PlayerIdHandler playerIdHandler = new PlayerIdHandler();
+        PlayerSessionHandler playerSessionHandler = new PlayerSessionHandler(main);
+
+        // The audio GET uses its own short-lived stream token and must not pass
+        // through the administrative JWT middleware used by the other /v1 routes.
+        router.get("/v1/players/:playerId/stream")
+                .handler(playerIdHandler)
+                .handler(new PlayerStreamHandler(main));
+
         router.route("/v1/*").handler(JWTAuthHandler.create(jwtAuth));
         router.route("/v1/*").handler(new JWTUserHandler());
 
         WebsocketHandler.setup(main, router);
 
-        GuildIdHandler guildIdHandler = new GuildIdHandler();
-        PlayerSessionHandler playerSessionHandler = new PlayerSessionHandler(main);
+        router.route("/v1/players/:playerId").handler(playerIdHandler);
+        router.route("/v1/players/:playerId/*").handler(playerIdHandler);
 
-        router.route("/v1/players/:guildId").handler(guildIdHandler);
-        router.route("/v1/players/:guildId/*").handler(guildIdHandler);
-
-        router.route("/v1/players/:guildId").handler(playerSessionHandler);
-        router.route("/v1/players/:guildId/*").handler(playerSessionHandler);
+        router.route("/v1/players/:playerId").handler(playerSessionHandler);
+        router.route("/v1/players/:playerId/*").handler(playerSessionHandler);
 
         log.debug("Registering server routes...");
 
@@ -110,7 +116,7 @@ public class RestHandler {
                     .thenAccept(json -> context.response().setStatusCode(200).send(json.toBuffer()));
         });
 
-        router.post("/v1/players/:guildId/gapless-playback").handler(context -> {
+        router.post("/v1/players/:playerId/gapless-playback").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
 
             playerSession.setFrameProviderMode(PlayerFrameProviderMode.GAPLESS);
@@ -118,7 +124,7 @@ public class RestHandler {
             context.response().setStatusCode(204).send();
         });
 
-        router.post("/v1/players/:guildId/normal-playback").handler(context -> {
+        router.post("/v1/players/:playerId/normal-playback").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
 
             playerSession.setFrameProviderMode(PlayerFrameProviderMode.NORMAL);
@@ -126,7 +132,7 @@ public class RestHandler {
             context.response().setStatusCode(204).send();
         });
 
-        router.post("/v1/players/:guildId/crossfade-playback").handler(context -> {
+        router.post("/v1/players/:playerId/crossfade-playback").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
 
             playerSession.setFrameProviderMode(PlayerFrameProviderMode.CROSSFADE);
@@ -134,7 +140,7 @@ public class RestHandler {
             context.response().setStatusCode(204).send();
         });
 
-        router.post("/v1/players/:guildId/pause").handler(context -> {
+        router.post("/v1/players/:playerId/pause").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
 
             playerSession.pause();
@@ -142,7 +148,7 @@ public class RestHandler {
             context.response().setStatusCode(204).send();
         });
 
-        router.post("/v1/players/:guildId/resume").handler(context -> {
+        router.post("/v1/players/:playerId/resume").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
 
             playerSession.resume();
@@ -150,7 +156,7 @@ public class RestHandler {
             context.response().setStatusCode(204).send();
         });
 
-        router.post("/v1/players/:guildId/skip").handler(context -> {
+        router.post("/v1/players/:playerId/skip").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
 
             QueueEntry entry = playerSession.getQueue().peek();
@@ -165,7 +171,7 @@ public class RestHandler {
             context.response().send(RequestUtil.trackToJson(main.getAudioPlayerManager(), entry.getTrack()).toBuffer());
         });
 
-        router.post("/v1/players/:guildId/previous").handler(context -> {
+        router.post("/v1/players/:playerId/previous").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
 
             QueueEntry entry = playerSession.getQueue().peekPrevious();
@@ -180,14 +186,71 @@ public class RestHandler {
             context.response().send(RequestUtil.trackToJson(main.getAudioPlayerManager(), entry.getTrack()).toBuffer());
         });
 
+        router.post("/v1/players/:playerId/queue/shuffle").handler(context -> {
+            PlayerSession playerSession = context.get("playerSession");
+
+            playerSession.shuffleQueue();
+
+            context.response().send(playerSession.getQueue().toJson(main.getAudioPlayerManager()).toBuffer());
+        });
+
         router.route()
                 .method(HttpMethod.POST)
                 .method(HttpMethod.PUT)
                 .method(HttpMethod.PATCH)
                 .handler(new JsonBodyHandler());
 
+        router.post("/v1/players/:playerId/stream-token").handler(context -> {
+            PlayerSession playerSession = context.get("playerSession");
+            JsonObject json = JsonBodyHandler.getBody(context);
 
-        router.post("/v1/players/:guildId/seek").handler(context -> {
+            Object rawUserId = json.getValue("userId");
+            if (!(rawUserId instanceof String userId) || userId.isBlank()) {
+                RequestUtil.handleError(context, 400, "Missing or invalid userId");
+                return;
+            }
+
+            try {
+                userId = Long.toUnsignedString(Long.parseUnsignedLong(userId.trim()));
+            } catch (Exception exception) {
+                RequestUtil.handleError(context, 400, "Invalid userId");
+                return;
+            }
+
+            Long expiresInMs = null;
+            Object rawExpiresInMs = json.getValue("expiresInMs");
+
+            if (rawExpiresInMs != null) {
+                if (!(rawExpiresInMs instanceof Number number)) {
+                    RequestUtil.handleError(context, 400, "expiresInMs must be a number");
+                    return;
+                }
+
+                expiresInMs = number.longValue();
+
+                if (expiresInMs <= 0L) {
+                    RequestUtil.handleError(context, 400, "expiresInMs must be greater than 0");
+                    return;
+                }
+            }
+
+            try {
+                JsonObject token = main.getStreamTokenManager()
+                        .issue(playerSession, userId, expiresInMs)
+                        .toJson();
+
+                context.response()
+                        .setStatusCode(201)
+                        .putHeader("Cache-Control", "no-store")
+                        .send(token.toBuffer());
+            } catch (IllegalArgumentException exception) {
+                RequestUtil.handleError(context, 400, exception.getMessage());
+            } catch (IllegalStateException exception) {
+                RequestUtil.handleError(context, 410, exception.getMessage());
+            }
+        });
+
+        router.post("/v1/players/:playerId/seek").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
             JsonObject json = JsonBodyHandler.getBody(context);
 
@@ -215,7 +278,7 @@ public class RestHandler {
             context.response().send(playerSession.toJson(main.getAudioPlayerManager()).toBuffer());
         });
 
-        router.post("/v1/players/:guildId/loop/track").handler(context -> {
+        router.post("/v1/players/:playerId/loop/track").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
             JsonObject json = JsonBodyHandler.getBody(context);
 
@@ -231,7 +294,7 @@ public class RestHandler {
             context.response().send(playerSession.toJson(main.getAudioPlayerManager()).toBuffer());
         });
 
-        router.post("/v1/players/:guildId/loop/queue").handler(context -> {
+        router.post("/v1/players/:playerId/loop/queue").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
             JsonObject json = JsonBodyHandler.getBody(context);
 
@@ -247,63 +310,157 @@ public class RestHandler {
             context.response().send(playerSession.toJson(main.getAudioPlayerManager()).toBuffer());
         });
 
-        router.get("/v1/players").handler(context -> {
+        router.post("/v1/players").handler(context -> {
             PlayerSessionManager sessionManager = getPlayerSession(context, main);
+            JsonObject json = JsonBodyHandler.getBody(context);
+            PlayerSession player = sessionManager.create();
 
-            context.response().send(sessionManager.toJson().toBuffer());
+            String providerMode = json.getString("providerMode");
+            if (!SourceTools.isBlank(providerMode)) {
+                try {
+                    player.setFrameProviderMode(PlayerFrameProviderMode.valueOf(providerMode.trim().toUpperCase()));
+                } catch (IllegalArgumentException exception) {
+                    sessionManager.destroy(player.getId());
+                    RequestUtil.handleError(context, 400, "Invalid providerMode");
+                    return;
+                }
+            }
+
+            context.response()
+                    .setStatusCode(201)
+                    .send(player.toJson(main.getAudioPlayerManager()).toBuffer());
         });
 
-        router.get("/v1/players/:guildId").handler(context -> {
-            PlayerSession playerSession = context.get("playerSession");
+        router.get("/v1/players").handler(context -> {
+            PlayerSessionManager sessionManager = getPlayerSession(context, main);
+            String guildId = firstQueryParam(context, "guildId");
+            String connectionId = firstQueryParam(context, "connectionId");
 
+            if (!SourceTools.isBlank(guildId) && !SourceTools.isBlank(connectionId)) {
+                RequestUtil.handleError(context, 400, "Use only guildId or connectionId");
+                return;
+            }
+
+            try {
+                context.response().send(sessionManager.toJson(guildId, connectionId).toBuffer());
+            } catch (IllegalArgumentException exception) {
+                RequestUtil.handleError(context, 400, exception.getMessage());
+            }
+        });
+
+        router.get("/v1/players/:playerId").handler(context -> {
+            PlayerSession playerSession = context.get("playerSession");
             context.response().send(playerSession.toJson(main.getAudioPlayerManager()).toBuffer());
         });
 
-        router.post("/v1/players/:guildId/voice").handler(context -> {
-            PlayerSessionManager playerSessionManager = context.get("playerSessionManager");
+        router.get("/v1/players/:playerId/connections").handler(context -> {
+            PlayerSession player = context.get("playerSession");
+            JsonArray connections = new JsonArray();
+            player.getConnections().forEach(connection -> connections.add(connection.toJson()));
+            context.response().send(connections.toBuffer());
+        });
 
+        router.get("/v1/players/:playerId/connections/:connectionId").handler(context -> {
+            PlayerSession player = context.get("playerSession");
+            PlayerConnection connection = player.getConnection(context.pathParam("connectionId"));
+
+            if (connection == null) {
+                RequestUtil.handleError(context, 404, "Unknown connection");
+                return;
+            }
+
+            context.response().send(connection.toJson().toBuffer());
+        });
+
+        router.post("/v1/players/:playerId/connections").handler(context -> {
+            PlayerSession player = context.get("playerSession");
+            PlayerSessionManager sessionManager = context.get("playerSessionManager");
             JsonObject json = JsonBodyHandler.getBody(context);
 
+            ConnectionType type = ConnectionType.fromJson(json.getString("type", json.getString("platform")));
+            if (type == null) {
+                RequestUtil.handleError(context, 400, "Missing or invalid connection type");
+                return;
+            }
+
+            if (type != ConnectionType.DISCORD) {
+                RequestUtil.handleError(context, 400, "HTTP connections are created by GET /stream");
+                return;
+            }
+
+            String guildId = json.getString("guildId");
             String channelId = json.getString("channelId");
             String endpoint = json.getString("endpoint");
             String token = json.getString("token");
             String sessionId = json.getString("sessionId");
 
-            VoiceServerInfo serverInfo =
-                    VoiceServerInfo
-                            .builder()
-                            .setToken(token)
-                            .setChannelId(Long.parseLong(channelId))
-                            .setEndpoint(endpoint)
-                            .setSessionId(sessionId)
-                            .build();
+            if (SourceTools.isBlank(guildId)
+                    || SourceTools.isBlank(channelId)
+                    || SourceTools.isBlank(endpoint)
+                    || SourceTools.isBlank(token)
+                    || SourceTools.isBlank(sessionId)) {
+                RequestUtil.handleError(context, 400, "Missing Discord connection fields");
+                return;
+            }
 
-            playerSessionManager.connectVoiceChannel(context.pathParam("guildId"), serverInfo);
+            try {
+                long parsedChannelId = Long.parseUnsignedLong(channelId);
+                VoiceServerInfo serverInfo = VoiceServerInfo.builder()
+                        .setToken(token)
+                        .setChannelId(parsedChannelId)
+                        .setEndpoint(endpoint)
+                        .setSessionId(sessionId)
+                        .build();
+
+                DiscordPlayerConnection connection = sessionManager.createDiscordConnection(
+                        player,
+                        guildId,
+                        channelId,
+                        endpoint,
+                        serverInfo
+                );
+
+                context.response().setStatusCode(201).send(connection.toJson().toBuffer());
+            } catch (IllegalArgumentException exception) {
+                RequestUtil.handleError(context, 400, exception.getMessage());
+            } catch (IllegalStateException exception) {
+                RequestUtil.handleError(context, 409, exception.getMessage());
+            }
+        });
+
+        router.delete("/v1/players/:playerId/connections/:connectionId").handler(context -> {
+            PlayerSession player = context.get("playerSession");
+            boolean deleted = player.deleteConnection(context.pathParam("connectionId"), "deletedByRequest");
+
+            if (!deleted) {
+                RequestUtil.handleError(context, 404, "Unknown connection");
+                return;
+            }
 
             context.response().setStatusCode(204).send();
         });
 
-        router.delete("/v1/players/:guildId").handler(context -> {
+        router.delete("/v1/players/:playerId").handler(context -> {
             PlayerSessionManager playerSessionManager = context.get("playerSessionManager");
 
-            playerSessionManager.destroy(context.get("guildId"));
+            playerSessionManager.destroy(context.get("playerId"));
             context.response().setStatusCode(204).send();
         });
 
-        router.get("/v1/players/:guildId/nowplaying").handler(context -> {
+        router.get("/v1/players/:playerId/nowplaying").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
 
-            AudioTrack track = playerSession.getPlayingTrack();
+            QueueEntry entry = playerSession.getCurrentEntry();
 
-            if (track == null) {
+            if (entry == null) {
                 context.response().setStatusCode(204).send();
                 return;
             }
 
-            context.response().send(RequestUtil.trackToJson(main.getAudioPlayerManager(), track).toBuffer());
+            context.response().send(entry.toJson(main.getAudioPlayerManager()).toBuffer());
         });
 
-        router.post("/v1/players/:guildId/volume").handler(context -> {
+        router.post("/v1/players/:playerId/volume").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
 
             JsonObject json = JsonBodyHandler.getBody(context);
@@ -320,7 +477,7 @@ public class RestHandler {
             context.response().setStatusCode(204).send();
         });
 
-        router.post("/v1/players/:guildId/filters").handler(context -> {
+        router.post("/v1/players/:playerId/filters").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
 
             JsonObject json = JsonBodyHandler.getBody(context);
@@ -330,7 +487,7 @@ public class RestHandler {
             context.response().send(playerSession.getPlayerFilters().toJson().toBuffer());
         });
 
-        router.post("/v1/players/:guildId/play").handler(context -> {
+        router.post("/v1/players/:playerId/play").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
             JsonObject json = JsonBodyHandler.getBody(context);
 
@@ -357,21 +514,13 @@ public class RestHandler {
             context.response().send(playerSession.toJson(playerManager).toBuffer());
         });
 
-        router.get("/v1/players/:guildId/queue").handler(context -> {
+        router.get("/v1/players/:playerId/queue").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
 
             context.response().send(playerSession.getQueue().toJson(main.getAudioPlayerManager()).toBuffer());
         });
 
-        router.post("/v1/players/:guildId/queue/shuffle").handler(context -> {
-            PlayerSession playerSession = context.get("playerSession");
-
-            playerSession.shuffleQueue();
-
-            context.response().send(playerSession.getQueue().toJson(main.getAudioPlayerManager()).toBuffer());
-        });
-
-        router.delete("/v1/players/:guildId/queue/history").handler(context -> {
+        router.delete("/v1/players/:playerId/queue/history").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
 
             boolean cleared = playerSession.clearQueueHistory();
@@ -382,7 +531,7 @@ public class RestHandler {
                     .toBuffer());
         });
 
-        router.delete("/v1/players/:guildId/queue/all").handler(context -> {
+        router.delete("/v1/players/:playerId/queue/all").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
 
             boolean cleared = playerSession.clearQueuedEntriesAndHistory();
@@ -393,7 +542,7 @@ public class RestHandler {
                     .toBuffer());
         });
 
-        router.delete("/v1/players/:guildId/queue").handler(context -> {
+        router.delete("/v1/players/:playerId/queue").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
 
             boolean cleared = playerSession.clearQueuedEntries();
@@ -404,7 +553,7 @@ public class RestHandler {
                     .toBuffer());
         });
 
-        router.delete("/v1/players/:guildId/queue/:entryId").handler(context -> {
+        router.delete("/v1/players/:playerId/queue/:entryId").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
             String entryId = context.pathParam("entryId");
 
@@ -426,7 +575,7 @@ public class RestHandler {
                     .toBuffer());
         });
 
-        router.post("/v1/players/:guildId/queue").handler(context -> {
+        router.post("/v1/players/:playerId/queue").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
 
             JsonObject json = JsonBodyHandler.getBody(context);
@@ -501,22 +650,9 @@ public class RestHandler {
                 });
     }
 
-    private static PlayerSession getPlayer(RoutingContext context, Main main) {
-        PlayerSessionManager sessionManager = getPlayerSession(context, main);
-        return getPlayer(context.pathParam("guildId"), sessionManager);
-    }
-
-    private static PlayerSession getPlayer(String guildId, PlayerSessionManager sessionManager) {
-        return sessionManager.getOrCreate(guildId);
-    }
-
-    private static PlayerSession getOrCreatePlayer(RoutingContext context, Main main) {
-        PlayerSessionManager sessionManager = getPlayerSession(context, main);
-        return getOrCreatePlayer(context.pathParam("guildId"), sessionManager);
-    }
-
-    private static PlayerSession getOrCreatePlayer(String guildId, PlayerSessionManager sessionManager) {
-        return sessionManager.getOrCreate(guildId);
+    private static String firstQueryParam(RoutingContext context, String name) {
+        List<String> values = context.queryParam(name);
+        return values.isEmpty() ? null : values.get(0);
     }
 
     private static Boolean readEnabled(JsonObject json, String fallbackKey) {

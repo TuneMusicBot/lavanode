@@ -10,18 +10,30 @@ import com.github.WearifulCupid0.lavanode.player.frame.gapless.GaplessFrameProvi
 import com.github.WearifulCupid0.lavanode.player.frame.normal.NormalFrameProvider;
 import com.github.WearifulCupid0.lavanode.player.queue.PlayerQueue;
 import com.github.WearifulCupid0.lavanode.player.queue.QueueEntry;
+import com.github.WearifulCupid0.lavanode.player.connections.ConnectionType;
+import com.github.WearifulCupid0.lavanode.player.connections.OpusFrameDispatcher;
+import com.github.WearifulCupid0.lavanode.player.connections.OpusFrameSubscription;
+import com.github.WearifulCupid0.lavanode.player.connections.PcmFrameDispatcher;
+import com.github.WearifulCupid0.lavanode.player.connections.PcmFrameSubscription;
+import com.github.WearifulCupid0.lavanode.player.connections.PlayerConnection;
+import com.github.WearifulCupid0.lavanode.player.connections.http.StreamTokenManager;
 import com.github.WearifulCupid0.lavanode.server.websocket.WebsocketOpCodes;
-import com.github.WearifulCupid0.lavanode.util.RequestUtil;
 import com.sedmelluq.discord.lavaplayer.filter.PcmFilterFactory;
 import com.sedmelluq.discord.lavaplayer.player.AudioPlayerManager;
 import com.sedmelluq.discord.lavaplayer.track.AudioTrack;
 import com.sedmelluq.discord.lavaplayer.track.playback.MutableAudioFrame;
+import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ScheduledExecutorService;
 
 public final class PlayerSession {
     private static final long GAPLESS_PRELOAD_BEFORE_MS = getLongSetting("GAPLESS_PRELOAD_BEFORE_MS", 1_000L, 100L, Main.TRACK_STUCK_THRESHOLD);
@@ -30,7 +42,6 @@ public final class PlayerSession {
 
     private static final long CROSSFADE_DURATION_MS = getLongSetting("CROSSFADE_DURATION_MS", 3_000L, 20L, 15_000L);
     private static final long CROSSFADE_PRELOAD_LEAD_MS = getLongSetting("CROSSFADE_PRELOAD_LEAD_MS", 1_000L, 0L, Main.TRACK_STUCK_THRESHOLD);
-    private static final int CROSSFADE_OPUS_QUALITY = getIntSetting("CROSSFADE_OPUS_QUALITY", 6, 0, 10);
 
     private final Object lock = new Object();
 
@@ -41,14 +52,18 @@ public final class PlayerSession {
     private final PlayerEventListener listener;
     private final PlayerSessionManager sessionManager;
 
+    private final PlayerSettings settings;
+
     private final PlayerFilters playerFilters = new PlayerFilters();
     private final PlayerFrameLossCounter playerFrameLossCounter = new PlayerFrameLossCounter();
 
-    private boolean disconnected = true;
-    private Long disconnectedAt = System.currentTimeMillis();
-
     //For Gapless and Crossfade frame providers
     private final ExecutorService preloadExecutor;
+
+    private final PcmFrameDispatcher pcmFrameDispatcher;
+    private final OpusFrameDispatcher opusFrameDispatcher;
+    private final StreamTokenManager streamTokenManager;
+    private final Map<String, PlayerConnection> connections = new ConcurrentHashMap<>();
 
     private PlayerFrameProvider frameProvider;
     private PlayerFrameProviderMode frameProviderMode = PlayerFrameProviderMode.NORMAL;
@@ -57,6 +72,7 @@ public final class PlayerSession {
     private volatile double realPosition = 0.0;
     private volatile boolean trackLoop;
     private volatile boolean queueLoop;
+    private volatile boolean destroyed;
 
 
     private static long getLongSetting(String name, long defaultValue, long minValue, long maxValue) {
@@ -104,16 +120,31 @@ public final class PlayerSession {
             String userId,
             PlayerSessionManager sessionManager,
             PlayerEventListener listener,
-            ExecutorService preloadExecutor
+            ExecutorService preloadExecutor,
+            ScheduledExecutorService frameDispatchExecutor,
+            StreamTokenManager streamTokenManager,
+            PlayerSettings settings
     ) {
         this.id = id;
         this.userId = userId;
-        this.queue = new PlayerQueue();
+
+        this.settings = settings;
+
+        this.queue = new PlayerQueue(settings.getQueueSize(), settings.getHistorySize());
+
         this.sessionManager = sessionManager;
         this.listener = listener;
         this.preloadExecutor = preloadExecutor;
+        this.streamTokenManager = streamTokenManager;
 
         this.frameProvider = createFrameProvider(PlayerFrameProviderMode.NORMAL);
+        this.pcmFrameDispatcher = new PcmFrameDispatcher(this, frameDispatchExecutor);
+        this.opusFrameDispatcher = new OpusFrameDispatcher(
+                this,
+                pcmFrameDispatcher,
+                frameDispatchExecutor,
+                sessionManager.getAudioPlayerManager().getConfiguration()
+        );
     }
 
     public void setFrameProviderMode(PlayerFrameProviderMode mode) {
@@ -191,10 +222,9 @@ public final class PlayerSession {
             case CROSSFADE -> new CrossfadeFrameProvider(
                     this,
                     listener,
-                    sessionManager.getPcmAudioPlayerManager(),
+                    sessionManager.getAudioPlayerManager(),
                     CROSSFADE_DURATION_MS,
-                    CROSSFADE_PRELOAD_LEAD_MS,
-                    CROSSFADE_OPUS_QUALITY
+                    CROSSFADE_PRELOAD_LEAD_MS
             );
         };
     }
@@ -261,22 +291,9 @@ public final class PlayerSession {
         return queue;
     }
 
+    /** Players now have explicit lifecycle through DELETE /v1/players/{playerId}. */
     public boolean shouldBeDeleted() {
-        if (this.disconnected) {
-            long now = System.currentTimeMillis();
-            return (this.disconnectedAt + 30_000) <= now;
-        }
         return false;
-    }
-
-    public void setConnected() {
-        this.disconnectedAt = null;
-        this.disconnected = false;
-    }
-
-    public void setDisconnected() {
-        this.disconnectedAt = System.currentTimeMillis();
-        this.disconnected = true;
     }
 
     public boolean isTrackLoop() {
@@ -285,12 +302,6 @@ public final class PlayerSession {
 
     public boolean isQueueLoop() {
         return queueLoop;
-    }
-
-    public JsonObject loopToJson() {
-        return new JsonObject()
-                .put("track", trackLoop)
-                .put("queue", queueLoop);
     }
 
     public void setTrackLoop(boolean enabled) {
@@ -343,8 +354,28 @@ public final class PlayerSession {
 
     public PlayerEventListener getListener() { return listener; }
 
-    public boolean provide(MutableAudioFrame audioFrame) {
+    public PcmFrameSubscription openPcmFrameSubscription(int capacity) {
+        if (destroyed) {
+            throw new IllegalStateException("Player session has been destroyed");
+        }
+
+        return pcmFrameDispatcher.subscribe(capacity);
+    }
+
+    public OpusFrameSubscription openOpusFrameSubscription(int capacity) {
+        if (destroyed) {
+            throw new IllegalStateException("Player session has been destroyed");
+        }
+
+        return opusFrameDispatcher.subscribe(capacity);
+    }
+
+    public boolean providePcm(MutableAudioFrame audioFrame) {
         synchronized (lock) {
+            if (destroyed) {
+                return false;
+            }
+
             boolean provided = this.frameProvider.provide(audioFrame);
 
             if (provided) {
@@ -525,8 +556,10 @@ public final class PlayerSession {
 
     public void setFilterFactory(PcmFilterFactory factory) {
         synchronized (lock) {
-            this.frameProvider.setFilterFactory(factory);
-            this.listener.onPlayerUpdate(this, WebsocketOpCodes.filtersUpdate);
+            if (this.settings.isFiltersEnabled()) {
+                this.frameProvider.setFilterFactory(factory);
+                this.listener.onPlayerUpdate(this, WebsocketOpCodes.filtersUpdate);
+            }
         }
     }
 
@@ -557,15 +590,133 @@ public final class PlayerSession {
         return this.frameProvider.getPlayingTrack();
     }
 
+    public QueueEntry getCurrentEntry() {
+        return this.frameProvider.getCurrentEntry();
+    }
+
     public boolean isPlaying() {
         return getPlayingTrack() != null;
     }
 
+    public Collection<PlayerConnection> getConnections() {
+        return List.copyOf(connections.values());
+    }
+
+    public PlayerConnection getConnection(String connectionId) {
+        return connections.get(connectionId);
+    }
+
+    public boolean hasConnection(String connectionId) {
+        return connections.containsKey(connectionId);
+    }
+
+    public boolean hasDiscordGuild(String guildId) {
+        for (PlayerConnection connection : connections.values()) {
+            if (connection.getType() == ConnectionType.DISCORD
+                    && guildId.equals(connection.toJson().getString("guildId"))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public void registerConnection(PlayerConnection connection) {
+        if (connection == null) {
+            throw new IllegalArgumentException("Connection is required");
+        }
+
+        synchronized (lock) {
+            if (destroyed) {
+                throw new IllegalStateException("Player session has been destroyed");
+            }
+
+            if (connections.putIfAbsent(connection.getId(), connection) != null) {
+                throw new IllegalStateException("Connection id already exists: " + connection.getId());
+            }
+        }
+
+        try {
+            sessionManager.indexConnection(this, connection);
+        } catch (RuntimeException exception) {
+            connections.remove(connection.getId(), connection);
+            throw exception;
+        }
+
+        listener.onConnectionCreate(this, connection);
+    }
+
+    public void notifyConnectionDisconnect(PlayerConnection connection, String reason) {
+        if (connection != null) {
+            listener.onConnectionDisconnect(this, connection, reason);
+        }
+    }
+
+    public void notifyConnectionError(PlayerConnection connection, Throwable error) {
+        if (connection != null && error != null) {
+            listener.onConnectionError(this, connection, error);
+        }
+    }
+
+    public boolean unregisterConnection(PlayerConnection connection, String reason) {
+        if (connection == null || !connections.remove(connection.getId(), connection)) {
+            return false;
+        }
+
+        sessionManager.unindexConnection(this, connection);
+        listener.onConnectionDelete(this, connection, reason);
+        return true;
+    }
+
+    public boolean deleteConnection(String connectionId, String reason) {
+        PlayerConnection connection = connections.get(connectionId);
+        if (connection == null) {
+            return false;
+        }
+
+        connection.disconnect(reason);
+        unregisterConnection(connection, reason);
+        return true;
+    }
+
     public void destroy() {
         synchronized (lock) {
+            if (destroyed) {
+                return;
+            }
+
+            destroyed = true;
+        }
+
+        streamTokenManager.revokeSession(this, "playerDestroyed");
+
+        for (PlayerConnection connection : List.copyOf(connections.values())) {
+            try {
+                connection.disconnect("playerDestroyed");
+            } finally {
+                unregisterConnection(connection, "playerDestroyed");
+            }
+        }
+
+        synchronized (lock) {
+            this.opusFrameDispatcher.destroy();
+            this.pcmFrameDispatcher.destroy();
             this.frameProvider.stop();
             this.frameProvider.destroy();
         }
+    }
+
+    public boolean isDestroyed() {
+        return destroyed;
+    }
+
+    private int getConnectionNumber(ConnectionType type) {
+        int size = 0;
+
+        for (PlayerConnection conn : this.connections.values())
+            if (conn.getType() == type)
+                size++;
+
+        return size;
     }
 
     public JsonObject toJson(AudioPlayerManager audioPlayerManager) {
@@ -576,12 +727,11 @@ public final class PlayerSession {
         synchronized (lock) {
             JsonObject json = new JsonObject();
             json
-                    .put("guildId", id)
+                    .put("id", id)
                     .put("userId", userId)
+                    .put("settings", settings.toJson())
                     .put("filters", playerFilters.toJson())
                     .put("providerMode", frameProviderMode.toString())
-                    .put("trackLoop", trackLoop)
-                    .put("queueLoop", queueLoop)
                     .put("loop", new JsonObject()
                             .put("track", trackLoop)
                             .put("queue", queueLoop))
@@ -590,12 +740,45 @@ public final class PlayerSession {
                     .put("transitioning", frameProvider.isTransitioning())
                     .put("position", realPosition);
 
-            if (withQueue)
-                json.put("queue", queue.toJson(audioPlayerManager));
+            int totalSent = playerFrameLossCounter.lastMinuteSuccess().sum();
+            int totalLost = playerFrameLossCounter.lastMinuteLoss().sum();
+            int totalDeficit = PlayerFrameLossCounter.EXPECTED_PACKET_COUNT_PER_MIN
+                    - (totalSent + totalLost);
 
-            AudioTrack track = frameProvider.getPlayingTrack();
-            if (track != null) {
-                json.put("track", RequestUtil.trackToJson(audioPlayerManager, track));
+            json.put("frameStats", new JsonObject()
+                    .put("success", totalSent)
+                    .put("loss", totalLost)
+                    .put("deficit", totalDeficit));
+
+            JsonArray connectionsJson = new JsonArray();
+            int discordCount = 0;
+            int httpCount = 0;
+
+            List<PlayerConnection> snapshot = new ArrayList<>(connections.values());
+            snapshot.sort(Comparator.comparing(PlayerConnection::getCreatedAt));
+
+            for (PlayerConnection connection : snapshot) {
+                connectionsJson.add(connection.toJson());
+                if (connection.getType() == ConnectionType.DISCORD) {
+                    discordCount++;
+                } else if (connection.getType() == ConnectionType.HTTP) {
+                    httpCount++;
+                }
+            }
+
+            json.put("connections", connectionsJson)
+                    .put("connectionCounts", new JsonObject()
+                            .put("total", snapshot.size())
+                            .put("discord", discordCount)
+                            .put("http", httpCount));
+
+            if (withQueue) {
+                json.put("queue", queue.toJson(audioPlayerManager));
+            }
+
+            QueueEntry entry = frameProvider.getCurrentEntry();
+            if (entry != null) {
+                json.put("track", entry.toJson(audioPlayerManager));
             }
 
             return json;

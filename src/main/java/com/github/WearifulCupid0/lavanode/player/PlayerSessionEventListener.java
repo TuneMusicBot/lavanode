@@ -1,6 +1,7 @@
 package com.github.WearifulCupid0.lavanode.player;
 
 import com.github.WearifulCupid0.lavanode.player.queue.QueueEntry;
+import com.github.WearifulCupid0.lavanode.player.connections.PlayerConnection;
 import com.github.WearifulCupid0.lavanode.server.websocket.WebsocketOpCodes;
 import com.github.WearifulCupid0.lavanode.util.RequestUtil;
 import com.sedmelluq.discord.lavaplayer.player.event.AudioEventAdapter;
@@ -115,6 +116,42 @@ public class PlayerSessionEventListener extends AudioEventAdapter implements Pla
     }
 
     @Override
+    public void onConnectionCreate(PlayerSession player, PlayerConnection connection) {
+        playerManager.dispatchEvent(
+                WebsocketOpCodes.connectionCreate,
+                connectionPayload(player, connection, null, null),
+                player.getUserId()
+        );
+    }
+
+    @Override
+    public void onConnectionDelete(PlayerSession player, PlayerConnection connection, String reason) {
+        playerManager.dispatchEvent(
+                WebsocketOpCodes.connectionDelete,
+                connectionPayload(player, connection, reason, null),
+                player.getUserId()
+        );
+    }
+
+    @Override
+    public void onConnectionDisconnect(PlayerSession player, PlayerConnection connection, String reason) {
+        playerManager.dispatchEvent(
+                WebsocketOpCodes.connectionDisconnect,
+                connectionPayload(player, connection, reason, null),
+                player.getUserId()
+        );
+    }
+
+    @Override
+    public void onConnectionError(PlayerSession player, PlayerConnection connection, Throwable error) {
+        playerManager.dispatchEvent(
+                WebsocketOpCodes.connectionError,
+                connectionPayload(player, connection, null, error),
+                player.getUserId()
+        );
+    }
+
+    @Override
     public void onGatewayError(PlayerSession player, Throwable error) {
         playerManager.dispatchEvent(
                 WebsocketOpCodes.gatewayError,
@@ -150,11 +187,35 @@ public class PlayerSessionEventListener extends AudioEventAdapter implements Pla
         );
     }
 
+    private JsonObject connectionPayload(
+            PlayerSession player,
+            PlayerConnection connection,
+            String reason,
+            Throwable error
+    ) {
+        JsonObject payload = new JsonObject()
+                .put("playerId", player.getId())
+                .put("userId", player.getUserId())
+                .put("connectionId", connection.getId())
+                .put("connectionType", connection.getType().jsonName())
+                .put("connection", connection.toJson());
+
+        if (reason != null) {
+            payload.put("reason", reason);
+        }
+
+        if (error != null) {
+            payload.put("error", RequestUtil.encodeThrowable(error));
+        }
+
+        return payload;
+    }
+
     private JsonObject withPlayer(PlayerSession player, JsonObject data) {
         JsonObject json = data == null ? new JsonObject() : data.copy();
 
         return json
-                .put("guildId", player.getId())
+                .put("playerId", player.getId())
                 .put("userId", player.getUserId());
     }
 }

@@ -65,7 +65,7 @@ public final class PlayerUpdateBroadcaster {
 
                 JsonObject payload = player.toJson(audioPlayerManager);
 
-                payload.put("guildId", player.getId());
+                payload.put("playerId", player.getId());
                 payload.put("userId", player.getUserId());
 
                 playerManager.dispatchEvent(

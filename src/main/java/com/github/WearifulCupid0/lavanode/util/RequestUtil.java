@@ -4,6 +4,7 @@ import com.github.WearifulCupid0.lavanode.Main;
 import com.github.WearifulCupid0.lavanode.player.PlayerFrameLossCounter;
 import com.github.WearifulCupid0.lavanode.player.PlayerSession;
 import com.github.WearifulCupid0.lavanode.player.filters.PlayerFilters;
+import com.github.WearifulCupid0.lavanode.radio.RadioPlaylist;
 import com.sedmelluq.discord.lavaplayer.player.AudioPlayer;
 import com.sedmelluq.discord.lavaplayer.player.AudioPlayerManager;
 import com.sedmelluq.discord.lavaplayer.player.DefaultAudioPlayer;
@@ -13,6 +14,9 @@ import com.sedmelluq.discord.lavaplayer.track.*;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.RoutingContext;
+import moe.kyokobot.koe.MediaConnection;
+import moe.kyokobot.koe.VoiceServerInfo;
+import moe.kyokobot.koe.gateway.MediaGatewayConnection;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -82,6 +86,9 @@ public class RequestUtil {
                 .put("type", playlist.getType())
                 .put("uri", playlist.getURI())
                 .put("size", playlist.getSize());
+
+        if (playlist instanceof RadioPlaylist)
+            jsonObject.put("fans", ((RadioPlaylist) playlist).getFans());
 
         List<AudioTrack> playlistTracks = playlist.getTracks();
         JsonArray tracks = new JsonArray();
@@ -339,6 +346,44 @@ public class RequestUtil {
         }, JsonArray::addAll));
 
         return root;
+    }
+
+    public static JsonObject mediaToJson(MediaConnection connection) {
+        JsonObject json = new JsonObject()
+                .put("version", connection.getClient().getGatewayVersion().name())
+                .put("options",
+                        new JsonObject()
+                                .put("deaf", connection.getOptions().isDeafened())
+                                .put("dave", connection.getOptions().isEnableDAVE())
+                                .put("daveLogsink", connection.getOptions().isEnableDAVELogSink())
+                                .put("verifyWSSHostname", connection.getOptions().isVerifyWSSHostname())
+                                .put("highPacketPriority", connection.getOptions().isHighPacketPriority())
+                                .put("experimental", connection.getOptions().isExperimental())
+                                .put("enableWSSPortOverride", connection.getOptions().isEnableWSSPortOverride())
+                );
+
+        MediaGatewayConnection gateway = connection.getGatewayConnection();
+        if (gateway != null) {
+            json.put("gateway",
+                    new JsonObject()
+                            .put("open", gateway.isOpen())
+                            .put("ping", gateway.getPing()
+                    )
+            );
+        }
+
+        VoiceServerInfo serverInfo = connection.getVoiceServerInfo();
+        if (serverInfo != null) {
+            json.put("voiceInfo",
+                    new JsonObject()
+                            .put("channelId", Long.toString(serverInfo.getChannelId()))
+                            .put("endpoint", serverInfo.getEndpoint())
+                            .put("token", serverInfo.getToken())
+                            .put("sessionId", serverInfo.getSessionId())
+            );
+        }
+
+        return json;
     }
 
     private static JsonObject toJson(MemoryUsage usage) {

@@ -36,7 +36,7 @@ public final class CrossfadeFrameProvider extends AudioEventAdapter implements P
 
     private final PcmFrameReader activeReader = new PcmFrameReader();
     private final PcmFrameReader incomingReader = new PcmFrameReader();
-    private final PcmToOpusEncoder opusEncoder;
+    private final PcmFrameWriter pcmWriter = new PcmFrameWriter();
     private final PcmCrossfadeMixer mixer;
 
     private final PcmFrameBuffer incomingBuffer;
@@ -83,8 +83,7 @@ public final class CrossfadeFrameProvider extends AudioEventAdapter implements P
             PlayerEventListener listener,
             AudioPlayerManager pcmPlayerManager,
             long crossfadeMs,
-            long preloadLeadMs,
-            int opusEncodingQuality
+            long preloadLeadMs
     ) {
         this.session = session;
         this.queue = session.getQueue();
@@ -100,7 +99,6 @@ public final class CrossfadeFrameProvider extends AudioEventAdapter implements P
         this.activePlayer.addListener(this);
         this.incomingPlayer.addListener(this);
 
-        this.opusEncoder = new PcmToOpusEncoder(pcmPlayerManager.getConfiguration(), opusEncodingQuality);
     }
 
     @Override
@@ -177,16 +175,16 @@ public final class CrossfadeFrameProvider extends AudioEventAdapter implements P
                 return provideCrossfadeLocked(targetFrame);
             }
 
-            return provideActiveAsOpusLocked(targetFrame);
+            return provideActiveAsPcmLocked(targetFrame);
         }
     }
 
-    private boolean provideActiveAsOpusLocked(MutableAudioFrame targetFrame) {
+    private boolean provideActiveAsPcmLocked(MutableAudioFrame targetFrame) {
         for (int attempt = 0; attempt < 2; attempt++) {
             boolean activeProvided = takeActivePcmFrameLocked(activeSamples);
 
             if (activeProvided) {
-                return opusEncoder.encode(activeSamples, targetFrame);
+                return pcmWriter.write(activeSamples, targetFrame);
             }
 
             if (promotedFinishedReason != null && currentEntry != null) {
@@ -219,7 +217,7 @@ public final class CrossfadeFrameProvider extends AudioEventAdapter implements P
                 config.crossfadeFrameCount()
         );
 
-        boolean encoded = opusEncoder.encode(mixedSamples, targetFrame);
+        boolean encoded = pcmWriter.write(mixedSamples, targetFrame);
 
         if (!encoded) {
             return false;
@@ -1103,7 +1101,6 @@ public final class CrossfadeFrameProvider extends AudioEventAdapter implements P
 
             activePlayer.destroy();
             incomingPlayer.destroy();
-            opusEncoder.close();
 
             currentEntry = null;
         }

@@ -16,23 +16,23 @@ public final class PlayerSessionHandler implements Handler<RoutingContext> {
 
     @Override
     public void handle(RoutingContext context) {
-        String guildId = context.get("guildId");
+        String playerId = context.get("playerId");
 
-        if (guildId == null) {
-            RequestUtil.handleError(context, 500, "Guild id was not resolved");
+        if (playerId == null) {
+            RequestUtil.handleError(context, 500, "Player id was not resolved");
             return;
         }
 
-        PlayerSessionManager playerSessionManager = main.getPlayerManager().getOrCreate(context.get("user-id"));
-        PlayerSession playerSession = playerSessionManager.getOrCreate(guildId);
+        PlayerSessionManager manager = main.getPlayerManager().getOrCreate(context.get("user-id"));
+        PlayerSession player = manager.get(playerId);
 
-        if (playerSession == null) {
+        if (player == null) {
             RequestUtil.handleError(context, 404, "Unknown player");
             return;
         }
 
-        context.put("playerSessionManager", playerSessionManager);
-        context.put("playerSession", playerSession);
+        context.put("playerSessionManager", manager);
+        context.put("playerSession", player);
         context.next();
     }
 }

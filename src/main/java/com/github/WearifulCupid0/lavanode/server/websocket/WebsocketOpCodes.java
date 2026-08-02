@@ -26,6 +26,14 @@ public enum WebsocketOpCodes {
     gatewayError,
     gatewayDisconnect,
 
+    connectionCreate,
+    connectionDelete,
+    connectionDisconnect,
+    connectionError,
+
+    httpClientConnect,
+    httpClientDisconnect,
+
     heartbeat,
     heartbeatAck,
     resumed,
