@@ -3,6 +3,7 @@ package com.github.WearifulCupid0.lavanode.player;
 import com.github.WearifulCupid0.lavanode.player.connections.ConnectionType;
 import io.vertx.core.json.JsonObject;
 
+import java.util.HashMap;
 import java.util.Map;
 
 public class PlayerSettings {
@@ -10,6 +11,24 @@ public class PlayerSettings {
     private final int historySize;
     private final Map<ConnectionType, Integer> limits;
     private boolean filtersEnabled;
+
+    public static PlayerSettings fromJson(JsonObject input) {
+        Map<ConnectionType, Integer> limits = new HashMap<>();
+        JsonObject json = input.getJsonObject("limits");
+        for (String key : json.fieldNames()) {
+            ConnectionType type = ConnectionType.fromJson(key);
+            if (type != null) {
+                limits.put(type, json.getInteger(key, -1));
+            }
+        }
+
+        return new PlayerSettings(
+                input.getInteger("queueSize", -1),
+                input.getInteger("historySize", -1),
+                limits,
+                input.getBoolean("filtersEnabled", true)
+        );
+    }
 
     public PlayerSettings(
             int queueSize,

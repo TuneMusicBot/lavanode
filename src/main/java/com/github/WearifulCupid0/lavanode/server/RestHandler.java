@@ -3,6 +3,7 @@ package com.github.WearifulCupid0.lavanode.server;
 import com.github.WearifulCupid0.lavanode.Main;
 import com.github.WearifulCupid0.lavanode.player.PlayerSession;
 import com.github.WearifulCupid0.lavanode.player.PlayerSessionManager;
+import com.github.WearifulCupid0.lavanode.player.PlayerSettings;
 import com.github.WearifulCupid0.lavanode.player.frame.PlayerFrameProviderMode;
 import com.github.WearifulCupid0.lavanode.player.queue.QueueEntry;
 import com.github.WearifulCupid0.lavanode.server.auth.JWTAuthFactory;
@@ -313,7 +314,7 @@ public class RestHandler {
         router.post("/v1/players").handler(context -> {
             PlayerSessionManager sessionManager = getPlayerSession(context, main);
             JsonObject json = JsonBodyHandler.getBody(context);
-            PlayerSession player = sessionManager.create();
+            PlayerSession player = sessionManager.create(PlayerSettings.fromJson(json));
 
             String providerMode = json.getString("providerMode");
             if (!SourceTools.isBlank(providerMode)) {
