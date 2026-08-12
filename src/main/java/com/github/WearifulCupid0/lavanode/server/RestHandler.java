@@ -1,5 +1,4 @@
 package com.github.WearifulCupid0.lavanode.server;
-
 import com.github.WearifulCupid0.lavanode.Main;
 import com.github.WearifulCupid0.lavanode.player.PlayerSession;
 import com.github.WearifulCupid0.lavanode.player.PlayerSessionManager;
@@ -35,7 +34,6 @@ import com.github.WearifulCupid0.lavanode.player.connections.PlayerConnection;
 import com.github.WearifulCupid0.lavanode.player.connections.discord.DiscordPlayerConnection;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -43,6 +41,7 @@ import java.util.concurrent.CompletionStage;
 
 public class RestHandler {
     private static final Logger log = LoggerFactory.getLogger(RestHandler.class);
+    private static final long MAX_REQUEST_BODY_BYTES = 1_048_576L;
 
     public static void setup(Main main) {
         Router router = Router.router(main.getVertx());
@@ -51,8 +50,6 @@ public class RestHandler {
                 main.getVertx(),
                 main.getTokenSecret()
         );
-
-        router.route().handler(BodyHandler.create());
 
         router.route().handler(context -> {
             log.debug(
@@ -66,7 +63,6 @@ public class RestHandler {
         });
 
         router.route().failureHandler(RestFailureHandler::handle);
-
         router.get("/ping").handler(context -> context.response().setStatusCode(204).send());
 
         PlayerIdHandler playerIdHandler = new PlayerIdHandler();
@@ -75,18 +71,19 @@ public class RestHandler {
         router.get("/v1/players/:playerId/stream")
                 .handler(playerIdHandler)
                 .handler(new PlayerStreamHandler(main));
-
         router.route("/v1/*").handler(JWTAuthHandler.create(jwtAuth));
         router.route("/v1/*").handler(new JWTUserHandler());
 
         WebsocketHandler.setup(main, router);
+
+        // Authenticate before buffering request bodies. Websocket/stream routes above do not need BodyHandler.
+        router.route("/v1/*").handler(BodyHandler.create().setBodyLimit(MAX_REQUEST_BODY_BYTES));
 
         router.route("/v1/players/:playerId").handler(playerIdHandler);
         router.route("/v1/players/:playerId/*").handler(playerIdHandler);
 
         router.route("/v1/players/:playerId").handler(playerSessionHandler);
         router.route("/v1/players/:playerId/*").handler(playerSessionHandler);
-
         log.debug("Registering server routes...");
 
         router.get("/v1/loadtracks").handler(context -> {
@@ -97,20 +94,17 @@ public class RestHandler {
                 RequestUtil.handleError(context, 400, "Missing identifier parameter");
                 return;
             }
-
             List<String> playlistLoadLimits = context.queryParam("playlistLoadLimit");
             String playlistLoadLimit = playlistLoadLimits.isEmpty() ? null : playlistLoadLimits.get(0);
 
             List<String> playlistOffsets = context.queryParam("playlistOffset");
             String playlistOffset = playlistOffsets.isEmpty() ? null : playlistOffsets.get(0);
-
             List<String> countryCodes = context.queryParam("countryCode");
             String countryCode = countryCodes.isEmpty() ? null : countryCodes.get(0);
 
             if (SourceTools.isBlank(countryCode)) countryCode = "US";
 
             AudioReference reference = new AudioReference(identifier.trim(), null, getIntOrDefault(playlistLoadLimit, 5), getIntOrDefault(playlistOffset, 0), countryCode);
-
             loadTracks(reference, main)
                     .thenAccept(json -> context.response().setStatusCode(200).send(json.toBuffer()));
         });
@@ -122,7 +116,6 @@ public class RestHandler {
 
             context.response().setStatusCode(204).send();
         });
-
         router.post("/v1/players/:playerId/normal-playback").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
 
@@ -133,7 +126,6 @@ public class RestHandler {
 
         router.post("/v1/players/:playerId/crossfade-playback").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
-
             playerSession.setFrameProviderMode(PlayerFrameProviderMode.CROSSFADE);
 
             context.response().setStatusCode(204).send();
@@ -146,7 +138,6 @@ public class RestHandler {
 
             context.response().setStatusCode(204).send();
         });
-
         router.post("/v1/players/:playerId/resume").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
 
@@ -159,7 +150,6 @@ public class RestHandler {
             PlayerSession playerSession = context.get("playerSession");
 
             QueueEntry entry = playerSession.getQueue().peek();
-
             if (entry == null) {
                 RequestUtil.handleError(context, 400, "There are no more tracks in the queue");
                 return;
@@ -172,7 +162,6 @@ public class RestHandler {
 
         router.post("/v1/players/:playerId/previous").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
-
             QueueEntry entry = playerSession.getQueue().peekPrevious();
 
             if (entry == null) {
@@ -184,7 +173,6 @@ public class RestHandler {
 
             context.response().send(RequestUtil.trackToJson(main.getAudioPlayerManager(), entry.getTrack()).toBuffer());
         });
-
         router.post("/v1/players/:playerId/queue/shuffle").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
 
@@ -192,7 +180,6 @@ public class RestHandler {
 
             context.response().send(playerSession.getQueue().toJson(main.getAudioPlayerManager()).toBuffer());
         });
-
         router.route()
                 .method(HttpMethod.POST)
                 .method(HttpMethod.PUT)
@@ -204,7 +191,6 @@ public class RestHandler {
             JsonObject json = JsonBodyHandler.getBody(context);
 
             Object rawPosition = json.getValue("position");
-
             if (!(rawPosition instanceof Number)) {
                 RequestUtil.handleError(context, 400, "Missing or invalid position");
                 return;
@@ -218,7 +204,6 @@ public class RestHandler {
             }
 
             boolean seeked = playerSession.seek(position);
-
             if (!seeked) {
                 RequestUtil.handleError(context, 400, "Current track is not seekable or no track is playing");
                 return;
@@ -230,7 +215,6 @@ public class RestHandler {
         router.post("/v1/players/:playerId/loop/track").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
             JsonObject json = JsonBodyHandler.getBody(context);
-
             Boolean enabled = readEnabled(json, "trackLoop");
 
             if (enabled == null) {
@@ -242,7 +226,6 @@ public class RestHandler {
 
             context.response().send(playerSession.toJson(main.getAudioPlayerManager()).toBuffer());
         });
-
         router.post("/v1/players/:playerId/loop/queue").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
             JsonObject json = JsonBodyHandler.getBody(context);
@@ -255,15 +238,20 @@ public class RestHandler {
             }
 
             playerSession.setQueueLoop(enabled);
-
             context.response().send(playerSession.toJson(main.getAudioPlayerManager()).toBuffer());
         });
 
         router.post("/v1/players").handler(context -> {
             PlayerSessionManager sessionManager = getPlayerSession(context, main);
             JsonObject json = JsonBodyHandler.getBody(context);
-            PlayerSession player = sessionManager.create(PlayerSettings.fromJson(json));
-
+            final PlayerSettings settings;
+            try {
+                settings = PlayerSettings.fromJson(json);
+            } catch (IllegalArgumentException exception) {
+                RequestUtil.handleError(context, 400, exception.getMessage());
+                return;
+            }
+            PlayerSession player = sessionManager.create(settings);
             String providerMode = json.getString("providerMode");
             if (!SourceTools.isBlank(providerMode)) {
                 try {
@@ -274,7 +262,6 @@ public class RestHandler {
                     return;
                 }
             }
-
             context.response()
                     .setStatusCode(201)
                     .send(player.toJson(main.getAudioPlayerManager()).toBuffer());
@@ -283,32 +270,35 @@ public class RestHandler {
         router.get("/v1/players").handler(context -> {
             PlayerSessionManager sessionManager = getPlayerSession(context, main);
             String guildId = firstQueryParam(context, "guildId");
+            String userId = firstQueryParam(context, "userId");
             String connectionId = firstQueryParam(context, "connectionId");
 
-            if (!SourceTools.isBlank(guildId) && !SourceTools.isBlank(connectionId)) {
-                RequestUtil.handleError(context, 400, "Use only guildId or connectionId");
+            if (!SourceTools.isBlank(connectionId)
+                    && (!SourceTools.isBlank(guildId) || !SourceTools.isBlank(userId))) {
+                RequestUtil.handleError(context, 400, "Use connectionId by itself, or guildId with optional userId");
+                return;
+            }
+            if (!SourceTools.isBlank(userId) && SourceTools.isBlank(guildId)) {
+                RequestUtil.handleError(context, 400, "userId requires guildId");
                 return;
             }
 
             try {
-                context.response().send(sessionManager.toJson(guildId, connectionId).toBuffer());
+                context.response().send(sessionManager.toJson(guildId, userId, connectionId).toBuffer());
             } catch (IllegalArgumentException exception) {
                 RequestUtil.handleError(context, 400, exception.getMessage());
             }
         });
-
         router.get("/v1/players/:playerId").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
             context.response().send(playerSession.toJson(main.getAudioPlayerManager()).toBuffer());
         });
-
         router.get("/v1/players/:playerId/connections").handler(context -> {
             PlayerSession player = context.get("playerSession");
             JsonArray connections = new JsonArray();
             player.getConnections().forEach(connection -> connections.add(connection.toJson()));
             context.response().send(connections.toBuffer());
         });
-
         router.get("/v1/players/:playerId/connections/:connectionId").handler(context -> {
             PlayerSession player = context.get("playerSession");
             PlayerConnection connection = player.getConnection(context.pathParam("connectionId"));
@@ -320,18 +310,15 @@ public class RestHandler {
 
             context.response().send(connection.toJson().toBuffer());
         });
-
         router.post("/v1/players/:playerId/connections").handler(context -> {
             PlayerSession player = context.get("playerSession");
             PlayerSessionManager sessionManager = context.get("playerSessionManager");
             JsonObject json = JsonBodyHandler.getBody(context);
-
             ConnectionType type = ConnectionType.fromJson(json.getString("type", json.getString("platform")));
             if (type == null) {
                 RequestUtil.handleError(context, 400, "Missing or invalid connection type");
                 return;
             }
-
             if (type == ConnectionType.DISCORD) {
                 String guildId = json.getString("guildId");
                 String channelId = json.getString("channelId");
@@ -339,16 +326,15 @@ public class RestHandler {
                 String endpoint = json.getString("endpoint");
                 String token = json.getString("token");
                 String sessionId = json.getString("sessionId");
-
                 if (SourceTools.isBlank(guildId)
                         || SourceTools.isBlank(channelId)
+                        || SourceTools.isBlank(userId)
                         || SourceTools.isBlank(endpoint)
                         || SourceTools.isBlank(token)
                         || SourceTools.isBlank(sessionId)) {
                     RequestUtil.handleError(context, 400, "Missing Discord connection fields");
                     return;
                 }
-
                 try {
                     long parsedChannelId = Long.parseUnsignedLong(channelId);
                     VoiceServerInfo serverInfo = VoiceServerInfo.builder()
@@ -357,7 +343,6 @@ public class RestHandler {
                             .setEndpoint(endpoint)
                             .setSessionId(sessionId)
                             .build();
-
                     DiscordPlayerConnection connection = sessionManager.createDiscordConnection(
                             player,
                             guildId,
@@ -366,20 +351,21 @@ public class RestHandler {
                             endpoint,
                             serverInfo
                     );
-
                     context.response().setStatusCode(201).send(connection.toJson().toBuffer());
                 } catch (IllegalArgumentException exception) {
                     RequestUtil.handleError(context, 400, exception.getMessage());
                 } catch (IllegalStateException exception) {
-                    RequestUtil.handleError(context, 409, exception.getMessage());
+                    RequestUtil.handleError(context, player.isDestroyed() ? 410 : 409, exception.getMessage());
                 }
-            } else if (type == ConnectionType.HTTP) {
+                return;
+            }
+
+            if (type == ConnectionType.HTTP) {
                 Object rawUserId = json.getValue("userId");
                 if (!(rawUserId instanceof String userId) || userId.isBlank()) {
                     RequestUtil.handleError(context, 400, "Missing or invalid userId");
                     return;
                 }
-
                 try {
                     userId = userId.trim();
                 } catch (Exception exception) {
@@ -389,7 +375,6 @@ public class RestHandler {
 
                 Long expiresInMs = null;
                 Object rawExpiresInMs = json.getValue("expiresInMs");
-
                 if (rawExpiresInMs != null) {
                     if (!(rawExpiresInMs instanceof Number number)) {
                         RequestUtil.handleError(context, 400, "expiresInMs must be a number");
@@ -397,7 +382,6 @@ public class RestHandler {
                     }
 
                     expiresInMs = number.longValue();
-
                     if (expiresInMs <= 0L) {
                         RequestUtil.handleError(context, 400, "expiresInMs must be greater than 0");
                         return;
@@ -408,7 +392,6 @@ public class RestHandler {
                     JsonObject token = main.getStreamTokenManager()
                             .issue(player, userId, expiresInMs)
                             .toJson();
-
                     context.response()
                             .setStatusCode(201)
                             .putHeader("Cache-Control", "no-store")
@@ -416,8 +399,9 @@ public class RestHandler {
                 } catch (IllegalArgumentException exception) {
                     RequestUtil.handleError(context, 400, exception.getMessage());
                 } catch (IllegalStateException exception) {
-                    RequestUtil.handleError(context, 410, exception.getMessage());
+                    RequestUtil.handleError(context, player.isDestroyed() ? 410 : 409, exception.getMessage());
                 }
+                return;
             }
 
             RequestUtil.handleError(context, 400, "Unknown connection type");
@@ -431,7 +415,6 @@ public class RestHandler {
                 RequestUtil.handleError(context, 404, "Unknown connection");
                 return;
             }
-
             context.response().setStatusCode(204).send();
         });
 
@@ -441,7 +424,6 @@ public class RestHandler {
             playerSessionManager.destroy(context.get("playerId"));
             context.response().setStatusCode(204).send();
         });
-
         router.get("/v1/players/:playerId/nowplaying").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
 
@@ -454,7 +436,6 @@ public class RestHandler {
 
             context.response().send(entry.toJson(main.getAudioPlayerManager()).toBuffer());
         });
-
         router.post("/v1/players/:playerId/volume").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
 
@@ -468,7 +449,6 @@ public class RestHandler {
             }
 
             playerSession.setVolume(volume);
-
             context.response().setStatusCode(204).send();
         });
 
@@ -481,7 +461,6 @@ public class RestHandler {
 
             context.response().send(playerSession.getPlayerFilters().toJson().toBuffer());
         });
-
         router.post("/v1/players/:playerId/play").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
             JsonObject json = JsonBodyHandler.getBody(context);
@@ -492,7 +471,6 @@ public class RestHandler {
                 RequestUtil.handleError(context, 400, "Missing encoded track");
                 return;
             }
-
             AudioPlayerManager playerManager = main.getAudioPlayerManager();
             AudioTrack track = RequestUtil.decodeTrack(playerManager, trackEncoded);
 
@@ -501,9 +479,8 @@ public class RestHandler {
                 return;
             }
 
-            String requesterId = json.getString("userId", context.get("user-id"));
+            String requesterId = json.getString("userId", context.get(JWTUserHandler.IDENTIFIER_CONTEXT_KEY));
             JsonObject extraData = json.getJsonObject("extraData");
-
             playerSession.play(track, requesterId, extraData);
 
             context.response().send(playerSession.toJson(playerManager).toBuffer());
@@ -514,7 +491,6 @@ public class RestHandler {
 
             context.response().send(playerSession.getQueue().toJson(main.getAudioPlayerManager()).toBuffer());
         });
-
         router.delete("/v1/players/:playerId/queue/history").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
 
@@ -525,7 +501,6 @@ public class RestHandler {
                     .put("queue", playerSession.getQueue().toJson(main.getAudioPlayerManager()))
                     .toBuffer());
         });
-
         router.delete("/v1/players/:playerId/queue/all").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
 
@@ -536,7 +511,6 @@ public class RestHandler {
                     .put("queue", playerSession.getQueue().toJson(main.getAudioPlayerManager()))
                     .toBuffer());
         });
-
         router.delete("/v1/players/:playerId/queue").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
 
@@ -547,7 +521,6 @@ public class RestHandler {
                     .put("queue", playerSession.getQueue().toJson(main.getAudioPlayerManager()))
                     .toBuffer());
         });
-
         router.delete("/v1/players/:playerId/queue/:entryId").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
             String entryId = context.pathParam("entryId");
@@ -558,7 +531,6 @@ public class RestHandler {
             }
 
             QueueEntry removed = playerSession.removeFromQueue(entryId);
-
             if (removed == null) {
                 RequestUtil.handleError(context, 404, "Queue entry not found");
                 return;
@@ -569,7 +541,6 @@ public class RestHandler {
                     .put("queue", playerSession.getQueue().toJson(main.getAudioPlayerManager()))
                     .toBuffer());
         });
-
         router.post("/v1/players/:playerId/queue").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
 
@@ -577,10 +548,9 @@ public class RestHandler {
 
             JsonObject extraData = json.getJsonObject("extraData");
 
-            String requesterId = json.getString("userId", context.get("user-id"));
+            String requesterId = json.getString("userId", context.get(JWTUserHandler.IDENTIFIER_CONTEXT_KEY));
             JsonArray tracks = json.getJsonArray("tracks");
             AudioPlayerManager playerManager = main.getAudioPlayerManager();
-
             if (tracks != null && !tracks.isEmpty()) {
                 JsonArray response = new JsonArray();
                 List<AudioTrack> formattedTracks = new ArrayList<>();
@@ -589,7 +559,6 @@ public class RestHandler {
                     String trackEncoded = tracks.getString(i);
                     if (!SourceTools.isBlank(trackEncoded)) {
                         AudioTrack track = RequestUtil.decodeTrack(playerManager, trackEncoded);
-
                         if (track != null)
                             formattedTracks.add(track);
                     }
@@ -603,7 +572,6 @@ public class RestHandler {
                 context.response().send(response.toBuffer());
                 return;
             }
-
             String trackEncoded = json.getString("track");
             if (SourceTools.isBlank(trackEncoded)) {
                 RequestUtil.handleError(context, 400, "Missing encoded track");
@@ -616,7 +584,6 @@ public class RestHandler {
                 RequestUtil.handleError(context, 400, "Invalid encoded track");
                 return;
             }
-
             QueueEntry entry = playerSession.enqueue(track, requesterId, extraData);
 
             context.response().send(entry.toJson(playerManager).toBuffer());
@@ -630,7 +597,6 @@ public class RestHandler {
         }
 
         int realPort = Integer.parseInt(port);
-
         main.getVertx()
                 .createHttpServer()
                 .requestHandler(router)
@@ -644,7 +610,6 @@ public class RestHandler {
                     log.error("Failed to start REST server", error);
                 });
     }
-
     private static String firstQueryParam(RoutingContext context, String name) {
         List<String> values = context.queryParam(name);
         return values.isEmpty() ? null : values.get(0);
@@ -658,7 +623,6 @@ public class RestHandler {
         }
 
         Object rawFallback = json.getValue(fallbackKey);
-
         if (rawFallback instanceof Boolean enabled) {
             return enabled;
         }
@@ -675,9 +639,8 @@ public class RestHandler {
     }
 
     private static PlayerSessionManager getPlayerSession(RoutingContext context, Main main) {
-        return getPlayerSession((String) context.get("user-id"), main);
+        return getPlayerSession((String) context.get(JWTUserHandler.IDENTIFIER_CONTEXT_KEY), main);
     }
-
     private static PlayerSessionManager getPlayerSession(String userId, Main main) {
         return main.getPlayerManager().getOrCreate(userId);
     }
@@ -685,7 +648,6 @@ public class RestHandler {
     private static CompletionStage<JsonObject> loadTracks(AudioReference identifier, Main main) {
         return loadTracks(identifier, main.getAudioPlayerManager());
     }
-
     private static CompletionStage<JsonObject> loadTracks(AudioReference identifier, AudioPlayerManager playerManager) {
         CompletableFuture<JsonObject> future = new CompletableFuture<>();
         playerManager.loadItem(identifier,
@@ -696,7 +658,6 @@ public class RestHandler {
                                 .put("loadType", "trackLoaded")
                                 .put("data", RequestUtil.trackToJson(playerManager, track)));
                     }
-
                     @Override
                     public void playlistLoaded(AudioPlaylist playlist) {
                         JsonObject json = new JsonObject();
@@ -704,7 +665,6 @@ public class RestHandler {
                             JsonArray tracks = new JsonArray();
                             for (AudioTrack track : playlist.getTracks())
                                 tracks.add(RequestUtil.trackToJson(playerManager, track));
-
                             json
                                     .put("loadType", "searchResult")
                                     .put("data", tracks);
@@ -713,7 +673,6 @@ public class RestHandler {
                                     .put("loadType", "playlistLoad")
                                     .put("data", RequestUtil.playlistToJson(playerManager, playlist));
                         }
-
                         AudioTrack selectedTrack = playlist.getSelectedTrack();
                         if (selectedTrack != null)
                             json.put("selectedTrack", RequestUtil.trackToJson(playerManager, selectedTrack));
@@ -725,10 +684,13 @@ public class RestHandler {
                     public void noMatches() {
                         future.complete(new JsonObject().put("loadType", "noMatches"));
                     }
-
                     @Override
                     public void loadFailed(FriendlyException exception) {
-                        future.complete(new JsonObject().put("loadType", "error").put("data", RequestUtil.encodeThrowable(exception)));
+                        future.complete(new JsonObject()
+                                .put("loadType", "error")
+                                .put("data", new JsonObject()
+                                        .put("message", exception.getMessage())
+                                        .put("severity", exception.severity.toString())));
                     }
                 });
         return future;

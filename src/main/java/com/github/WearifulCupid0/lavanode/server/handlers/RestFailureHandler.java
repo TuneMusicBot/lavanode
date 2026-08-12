@@ -1,19 +1,18 @@
 package com.github.WearifulCupid0.lavanode.server.handlers;
 
-import com.github.WearifulCupid0.lavanode.util.RequestUtil;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.RoutingContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.UUID;
 
 public final class RestFailureHandler {
     private static final Logger log = LoggerFactory.getLogger(RestFailureHandler.class);
 
     public static void handle(RoutingContext context) {
         Throwable throwable = context.failure();
-
         int statusCode = context.statusCode();
-
         if (statusCode < 400) {
             statusCode = 500;
         }
@@ -22,27 +21,28 @@ public final class RestFailureHandler {
             return;
         }
 
+        String requestId = UUID.randomUUID().toString();
         if (statusCode >= 500) {
-            log.error("Unhandled REST error", throwable);
+            log.error("Unhandled REST error [{}]", requestId, throwable);
         } else {
-            log.debug("REST failure {}: {}", statusCode, throwable == null ? null : throwable.getMessage());
+            log.debug(
+                    "REST failure {} [{}]: {}",
+                    statusCode,
+                    requestId,
+                    throwable == null ? null : throwable.getMessage()
+            );
         }
 
         JsonObject json = new JsonObject()
                 .put("error", true)
                 .put("status", statusCode)
-                .put("message", throwable != null && throwable.getMessage() != null
-                        ? throwable.getMessage()
-                        : defaultMessage(statusCode));
-
-        if (throwable != null) {
-            json.put("exception", RequestUtil.encodeThrowable(throwable));
-        }
+                .put("message", defaultMessage(statusCode))
+                .put("requestId", requestId);
 
         context.response()
                 .setStatusCode(statusCode)
                 .putHeader("Content-Type", "application/json")
-                .end(json.encodePrettily());
+                .end(json.encode());
     }
 
     private static String defaultMessage(int statusCode) {
@@ -52,6 +52,11 @@ public final class RestFailureHandler {
             case 403 -> "Forbidden";
             case 404 -> "Not Found";
             case 405 -> "Method Not Allowed";
+            case 409 -> "Conflict";
+            case 410 -> "Gone";
+            case 413 -> "Payload Too Large";
+            case 415 -> "Unsupported Media Type";
+            case 429 -> "Too Many Requests";
             default -> "Internal Server Error";
         };
     }

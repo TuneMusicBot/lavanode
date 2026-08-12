@@ -1,5 +1,4 @@
 package com.github.WearifulCupid0.lavanode.player.connections.http;
-
 import com.github.WearifulCupid0.lavanode.Main;
 import com.github.WearifulCupid0.lavanode.player.PlayerSession;
 import com.github.WearifulCupid0.lavanode.player.connections.ConnectionState;
@@ -11,14 +10,14 @@ import io.vertx.core.buffer.Buffer;
 import io.vertx.core.http.HttpHeaders;
 import io.vertx.core.http.HttpServerResponse;
 import io.vertx.core.json.JsonObject;
-
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /** One live HTTP listener represented as a first-class player connection. */
 public final class HttpPlayerConnection implements PlayerConnection {
     private static final int MAX_FRAMES_PER_TICK = 5;
-
+    private static final int WRITE_QUEUE_MAX_BYTES = 256 * 1024;
+    private static final long MAX_BACKPRESSURE_MS = 15_000L;
     private final String id = UUID.randomUUID().toString();
     private final Main main;
     private final StreamTokenManager tokenManager;
@@ -31,12 +30,11 @@ public final class HttpPlayerConnection implements PlayerConnection {
     private final AtomicBoolean closed = new AtomicBoolean();
     private final Object lifecycleLock = new Object();
     private final long createdAt = System.currentTimeMillis();
-
     private volatile ConnectionState state = ConnectionState.CREATED;
     private volatile Long connectedAt;
     private volatile long timerId = -1L;
     private volatile boolean registered;
-
+    private volatile long backpressureSince = -1L;
     HttpPlayerConnection(
             Main main,
             StreamTokenManager tokenManager,
@@ -53,24 +51,29 @@ public final class HttpPlayerConnection implements PlayerConnection {
         this.response = response;
         this.ip = ip;
     }
-
     boolean start() {
         state = ConnectionState.CONNECTING;
 
-        if (!tokenManager.register(this)) {
+        try {
+            if (!tokenManager.register(this)) {
+                subscription.close();
+                state = ConnectionState.CLOSED;
+                return false;
+            }
+        } catch (RuntimeException exception) {
             subscription.close();
             state = ConnectionState.CLOSED;
-            return false;
+            throw exception;
         }
 
         synchronized (lifecycleLock) {
             if (closed.get()) {
                 return false;
             }
-
             response
                     .setStatusCode(200)
                     .setChunked(true)
+                    .setWriteQueueMaxSize(WRITE_QUEUE_MAX_BYTES)
                     .putHeader(HttpHeaders.CONTENT_TYPE, "audio/ogg; codecs=opus")
                     .putHeader(HttpHeaders.CACHE_CONTROL, "no-store, no-cache, must-revalidate")
                     .putHeader("Pragma", "no-cache")
@@ -85,7 +88,6 @@ public final class HttpPlayerConnection implements PlayerConnection {
                     })
                     .closeHandler(ignored -> closeInternal("clientDisconnected", false))
                     .endHandler(ignored -> closeInternal("responseEnded", false));
-
             response.write(Buffer.buffer(muxer.createIdentificationPage()))
                     .onFailure(error -> {
                         player.notifyConnectionError(this, error);
@@ -96,7 +98,6 @@ public final class HttpPlayerConnection implements PlayerConnection {
                         player.notifyConnectionError(this, error);
                         closeInternal("connectionError", false);
                     });
-
             state = ConnectionState.CONNECTED;
             connectedAt = System.currentTimeMillis();
             timerId = main.getVertx().setPeriodic(PcmFrameDispatcher.FRAME_DURATION_MS, ignored -> tick());
@@ -116,7 +117,6 @@ public final class HttpPlayerConnection implements PlayerConnection {
     public String getIp() {
         return ip;
     }
-
     public String getClientUserId() {
         return token.getClientUserId();
     }
@@ -136,15 +136,21 @@ public final class HttpPlayerConnection implements PlayerConnection {
             return;
         }
 
-        subscription.keepAlive();
-
         if (response.writeQueueFull()) {
+            long now = System.currentTimeMillis();
+            if (backpressureSince < 0L) {
+                backpressureSince = now;
+            } else if (now - backpressureSince >= MAX_BACKPRESSURE_MS) {
+                closeInternal("clientTooSlow", true);
+            }
             return;
         }
 
+        backpressureSince = -1L;
+        subscription.keepAlive();
+
         int sent = 0;
         byte[] packet;
-
         while (sent < MAX_FRAMES_PER_TICK
                 && !response.writeQueueFull()
                 && (packet = subscription.poll()) != null) {
@@ -156,7 +162,6 @@ public final class HttpPlayerConnection implements PlayerConnection {
             sent++;
         }
     }
-
     @Override
     public String getId() {
         return id;
@@ -181,7 +186,6 @@ public final class HttpPlayerConnection implements PlayerConnection {
     public Long getConnectedAt() {
         return connectedAt;
     }
-
     @Override
     public JsonObject toJson() {
         return new JsonObject()
@@ -195,7 +199,6 @@ public final class HttpPlayerConnection implements PlayerConnection {
                 .put("connectedDurationMs", getConnectedDurationMs())
                 .put("expiresAt", token.getExpiresAt());
     }
-
     @Override
     public void disconnect(String reason) {
         closeInternal(reason == null ? "disconnected" : reason, true);
@@ -212,7 +215,6 @@ public final class HttpPlayerConnection implements PlayerConnection {
         synchronized (lifecycleLock) {
             long currentTimerId = timerId;
             timerId = -1L;
-
             if (currentTimerId != -1L) {
                 main.getVertx().cancelTimer(currentTimerId);
             }
@@ -228,7 +230,6 @@ public final class HttpPlayerConnection implements PlayerConnection {
             player.notifyConnectionDisconnect(this, reason);
             tokenManager.unregister(this, reason);
         }
-
         if (endResponse && !response.ended()) {
             response.end();
         }

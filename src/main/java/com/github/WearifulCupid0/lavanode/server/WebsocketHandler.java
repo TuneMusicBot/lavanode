@@ -1,8 +1,10 @@
 package com.github.WearifulCupid0.lavanode.server;
 
 import com.github.WearifulCupid0.lavanode.Main;
+import com.github.WearifulCupid0.lavanode.server.auth.JWTUserHandler;
 import com.github.WearifulCupid0.lavanode.server.websocket.WebsocketConnection;
 import com.github.WearifulCupid0.lavanode.server.websocket.WebsocketManager;
+import com.github.WearifulCupid0.lavanode.util.RequestUtil;
 import com.sedmelluq.lavaplayer.extensions.thirdpartysources.SourceTools;
 import io.vertx.core.Future;
 import io.vertx.core.Handler;
@@ -18,21 +20,22 @@ public class WebsocketHandler {
 
     public static void setup(Main main, Router router) {
         log.debug("Creating websocket handler...");
-
         router.route("/v1/websocket").handler(handler(main));
-
         log.debug("Websocket route registered!");
     }
 
     private static Handler<RoutingContext> handler(Main main) {
         return context -> {
             HttpServerRequest req = context.request();
-            if("websocket".equalsIgnoreCase(req.getHeader("upgrade"))) {
+            if ("websocket".equalsIgnoreCase(req.getHeader("upgrade"))) {
+                String userId = context.get(JWTUserHandler.IDENTIFIER_CONTEXT_KEY);
+                if (SourceTools.isBlank(userId)) {
+                    RequestUtil.handleError(context, 401, "Missing authenticated identifier");
+                    return;
+                }
+
                 Future<ServerWebSocket> socketFuture = req.toWebSocket();
-
-                String userId = context.get("user-id");
                 log.debug("Incoming websocket connection from user {}", userId);
-
                 socketFuture.andThen(serverSocket -> {
                     if (serverSocket.failed()) {
                         log.debug("Connection from user {} failed before ready", userId);
@@ -41,17 +44,13 @@ public class WebsocketHandler {
 
                     log.debug("New connection from user {}", userId);
                     ServerWebSocket ws = serverSocket.result();
-
                     String resumeId = context.request().getHeader("Resume-Key");
-
                     WebsocketManager websocketManager = main.getWebsocketManager();
                     if (!SourceTools.isBlank(resumeId)) {
                         log.debug("Trying to resume websocket connection from user {}", userId);
                         boolean resumed = websocketManager.resumeConnection(userId, resumeId, ws);
-
                         if (resumed) {
                             log.info("Websocket connection from user {} resumed", userId);
-
                             return;
                         }
                         log.debug("Unknown connection, failed to resume connection from user {}", userId);
@@ -60,7 +59,6 @@ public class WebsocketHandler {
                     WebsocketConnection connection = websocketManager.createNewConnection(userId, ws);
                     connection.start();
                 });
-
                 return;
             }
 

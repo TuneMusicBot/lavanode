@@ -5,6 +5,8 @@ import io.vertx.core.Handler;
 import io.vertx.ext.web.RoutingContext;
 
 public final class JWTUserHandler implements Handler<RoutingContext> {
+    public static final String IDENTIFIER_CONTEXT_KEY = "identifier";
+
     @Override
     public void handle(RoutingContext context) {
         if (context.user() == null) {
@@ -13,7 +15,6 @@ public final class JWTUserHandler implements Handler<RoutingContext> {
         }
 
         String identifier = context.user().principal().getString("sub");
-
         if (identifier == null || identifier.isBlank()) {
             identifier = context.user().principal().getString("identifier");
         }
@@ -23,13 +24,7 @@ public final class JWTUserHandler implements Handler<RoutingContext> {
             return;
         }
 
-        try {
-            context.put("identifier", identifier);
-        } catch (Exception e) {
-            RequestUtil.handleError(context, 400, "Invalid identifier in token");
-            return;
-        }
-
+        context.put(IDENTIFIER_CONTEXT_KEY, identifier.trim());
         context.next();
     }
 }

@@ -13,16 +13,17 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-
 /**
- * Issues short-lived or non-expiring bearer tokens for HTTP player streams.
+ * Issues bounded, expiring bearer tokens for HTTP player streams.
  *
  * Tokens are intentionally stateful so destroying a PlayerSession can revoke
  * every token immediately and close clients that are already connected.
  */
 public final class StreamTokenManager {
     private static final int TOKEN_BYTES = 32;
-
+    private static final long DEFAULT_TOKEN_TTL_MS = 15L * 60L * 1_000L;
+    private static final long MAX_TOKEN_TTL_MS = 24L * 60L * 60L * 1_000L;
+    private static final int MAX_TOKENS_PER_SESSION = 32;
     private final Main main;
     private final SecureRandom random = new SecureRandom();
     private final Map<String, StreamToken> tokens = new HashMap<>();
@@ -31,7 +32,6 @@ public final class StreamTokenManager {
     public StreamTokenManager(Main main) {
         this.main = main;
     }
-
     public StreamToken issue(PlayerSession playerSession, String clientUserId, Long expiresInMs) {
         if (playerSession == null || playerSession.isDestroyed()) {
             throw new IllegalStateException("Player session is no longer available");
@@ -42,33 +42,37 @@ public final class StreamTokenManager {
         }
 
         long issuedAt = System.currentTimeMillis();
-        Long expiresAt = null;
+        long ttlMs = expiresInMs == null ? DEFAULT_TOKEN_TTL_MS : expiresInMs;
+        if (ttlMs <= 0L) {
+            throw new IllegalArgumentException("expiresInMs must be greater than 0");
+        }
+        if (ttlMs > MAX_TOKEN_TTL_MS) {
+            throw new IllegalArgumentException("expiresInMs exceeds the server maximum of " + MAX_TOKEN_TTL_MS);
+        }
 
-        if (expiresInMs != null) {
-            if (expiresInMs <= 0L) {
-                throw new IllegalArgumentException("expiresInMs must be greater than 0");
-            }
-
-            try {
-                expiresAt = Math.addExact(issuedAt, expiresInMs);
-            } catch (ArithmeticException exception) {
-                throw new IllegalArgumentException("expiresInMs is too large", exception);
-            }
+        final long expiresAt;
+        try {
+            expiresAt = Math.addExact(issuedAt, ttlMs);
+        } catch (ArithmeticException exception) {
+            throw new IllegalArgumentException("expiresInMs is too large", exception);
         }
 
         byte[] bytes = new byte[TOKEN_BYTES];
         String value;
-
         synchronized (this) {
             if (playerSession.isDestroyed()) {
                 throw new IllegalStateException("Player session is no longer available");
+            }
+
+            Set<StreamToken> sessionTokens = tokensBySession.computeIfAbsent(playerSession, ignored -> new HashSet<>());
+            if (sessionTokens.size() >= MAX_TOKENS_PER_SESSION) {
+                throw new IllegalStateException("Stream token limit reached for player");
             }
 
             do {
                 random.nextBytes(bytes);
                 value = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
             } while (tokens.containsKey(value));
-
             StreamToken token = new StreamToken(
                     value,
                     playerSession,
@@ -78,12 +82,9 @@ public final class StreamTokenManager {
             );
 
             tokens.put(value, token);
-            tokensBySession.computeIfAbsent(playerSession, ignored -> new HashSet<>()).add(token);
-
-            if (expiresAt != null) {
-                long delay = Math.max(1L, expiresAt - issuedAt);
-                token.expirationTimerId = main.getVertx().setTimer(delay, ignored -> expireToken(token));
-            }
+            sessionTokens.add(token);
+            long delay = Math.max(1L, expiresAt - issuedAt);
+            token.expirationTimerId = main.getVertx().setTimer(delay, ignored -> expireToken(token));
 
             return token;
         }
@@ -95,7 +96,6 @@ public final class StreamTokenManager {
         }
 
         StreamToken expiredToken = null;
-
         synchronized (this) {
             StreamToken token = tokens.get(value);
 
@@ -106,10 +106,9 @@ public final class StreamTokenManager {
             if (!token.playerSession.getId().equals(playerId)) {
                 return null;
             }
-
             if (token.playerSession.isDestroyed()) {
                 expiredToken = token;
-            } else if (token.expiresAt != null && System.currentTimeMillis() >= token.expiresAt) {
+            } else if (System.currentTimeMillis() >= token.expiresAt) {
                 expiredToken = token;
             } else {
                 return token;
@@ -119,7 +118,6 @@ public final class StreamTokenManager {
         expireToken(expiredToken);
         return null;
     }
-
     public boolean register(HttpPlayerConnection connection) {
         StreamToken token = connection.getToken();
         boolean expire = false;
@@ -128,15 +126,13 @@ public final class StreamTokenManager {
             if (token.revoked || tokens.get(token.value) != token) {
                 return false;
             }
-
             if (token.playerSession.isDestroyed()
-                    || (token.expiresAt != null && System.currentTimeMillis() >= token.expiresAt)) {
+                    || System.currentTimeMillis() >= token.expiresAt) {
                 expire = true;
             } else {
                 if (!token.connections.add(connection)) {
                     return false;
                 }
-
                 try {
                     token.playerSession.registerConnection(connection);
                     connection.markRegistered();
@@ -155,14 +151,12 @@ public final class StreamTokenManager {
 
         return true;
     }
-
     public void unregister(HttpPlayerConnection connection, String reason) {
         boolean removed;
 
         synchronized (this) {
             StreamToken token = connection.getToken();
             removed = token.connections.remove(connection);
-
         }
 
         if (removed) {
@@ -170,7 +164,6 @@ public final class StreamTokenManager {
             connection.getToken().playerSession.unregisterConnection(connection, reason);
         }
     }
-
     public void revokeSession(PlayerSession playerSession, String reason) {
         List<HttpPlayerConnection> connections = new ArrayList<>();
 
@@ -185,7 +178,6 @@ public final class StreamTokenManager {
                 revokeTokenLocked(token, connections);
             }
         }
-
         for (HttpPlayerConnection connection : connections) {
             connection.disconnect(reason);
         }
@@ -204,7 +196,6 @@ public final class StreamTokenManager {
             }
 
             revokeTokenLocked(token, connections);
-
             Set<StreamToken> sessionTokens = tokensBySession.get(token.playerSession);
             if (sessionTokens != null) {
                 sessionTokens.remove(token);
@@ -219,7 +210,6 @@ public final class StreamTokenManager {
             connection.disconnect("tokenExpired");
         }
     }
-
     private void revokeTokenLocked(StreamToken token, List<HttpPlayerConnection> connections) {
         token.revoked = true;
         tokens.remove(token.value, token);
@@ -234,14 +224,12 @@ public final class StreamTokenManager {
 
     private void dispatchConnect(HttpPlayerConnection connection) {
         StreamToken token = connection.getToken();
-
         JsonObject payload = new JsonObject()
                 .put("playerId", token.playerSession.getId())
                 .put("connectionId", connection.getId())
                 .put("connectionType", connection.getType().jsonName())
                 .put("ip", connection.getIp())
                 .put("userId", token.clientUserId);
-
         main.getPlayerManager().dispatchEvent(
                 WebsocketOpCodes.connectionConnect,
                 payload,
@@ -251,7 +239,6 @@ public final class StreamTokenManager {
 
     private void dispatchDisconnect(HttpPlayerConnection connection, String reason) {
         StreamToken token = connection.getToken();
-
         JsonObject payload = new JsonObject()
                 .put("playerId", token.playerSession.getId())
                 .put("connectionId", connection.getId())
@@ -260,31 +247,28 @@ public final class StreamTokenManager {
                 .put("userId", token.clientUserId)
                 .put("connectedDurationMs", connection.getConnectedDurationMs())
                 .put("reason", reason);
-
         main.getPlayerManager().dispatchEvent(
                 WebsocketOpCodes.connectionDisconnect,
                 payload,
                 token.playerSession.getUserId()
         );
     }
-
     public static final class StreamToken {
         private final String value;
         private final PlayerSession playerSession;
         private final String clientUserId;
         private final long issuedAt;
-        private final Long expiresAt;
+        private final long expiresAt;
         private final Set<HttpPlayerConnection> connections = new HashSet<>();
 
         private boolean revoked;
         private Long expirationTimerId;
-
         private StreamToken(
                 String value,
                 PlayerSession playerSession,
                 String clientUserId,
                 long issuedAt,
-                Long expiresAt
+                long expiresAt
         ) {
             this.value = value;
             this.playerSession = playerSession;
@@ -296,7 +280,6 @@ public final class StreamTokenManager {
         public String getValue() {
             return value;
         }
-
         public PlayerSession getPlayerSession() {
             return playerSession;
         }
@@ -312,7 +295,6 @@ public final class StreamTokenManager {
         public Long getExpiresAt() {
             return expiresAt;
         }
-
         public JsonObject toJson() {
             return new JsonObject()
                     .put("token", value)
