@@ -128,13 +128,15 @@ public final class DiscordPlayerConnection implements PlayerConnection {
         return Long.toUnsignedString(channelId);
     }
 
+    public String getUserId() { return Long.toUnsignedString(userId); }
+
     @Override
     public JsonObject toJson() {
         JsonObject json = new JsonObject()
                 .put("id", id)
                 .put("type", getType().jsonName())
                 .put("state", state.jsonName())
-                .put("userId", userId)
+                .put("userId", getUserId())
                 .put("guildId", getGuildId())
                 .put("channelId", getChannelId())
                 .put("endpoint", endpoint)
