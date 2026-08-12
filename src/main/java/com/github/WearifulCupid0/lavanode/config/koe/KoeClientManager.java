@@ -1,12 +1,13 @@
 package com.github.WearifulCupid0.lavanode.config.koe;
 
 import moe.kyokobot.koe.Koe;
+import moe.kyokobot.koe.KoeClient;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class KoeClientManager {
-    private static final Map<Long, KoeClientItem> clients = new ConcurrentHashMap<>();
+    private static final Map<Long, KoeClient> clients = new ConcurrentHashMap<>();
 
     private static Koe koe;
 
@@ -14,14 +15,18 @@ public class KoeClientManager {
         KoeClientManager.koe = koe;
     }
 
-    public static KoeClientItem getClient(long userId) {
+    public static KoeClient getClient(long userId) {
         if (koe == null)
             throw new NullPointerException("Koe not defined");
-        return clients.computeIfAbsent(userId, (id) -> new KoeClientItem(koe.newClient(id)));
+        return clients.computeIfAbsent(userId, koe::newClient);
     }
 
     public static void cleanup() {
-        for (KoeClientItem item : clients.values())
-            if (item.shoudBeDeleted()) item.shutdown();
+        for (KoeClient item : clients.values()) {
+            if (item.getConnections().isEmpty()) {
+                item.close();
+                clients.remove(item.getClientId());
+            }
+        }
     }
 }
