@@ -27,12 +27,10 @@ public enum WebsocketOpCodes {
     gatewayDisconnect,
 
     connectionCreate,
+    connectionConnect,
     connectionDelete,
     connectionDisconnect,
     connectionError,
-
-    httpClientConnect,
-    httpClientDisconnect,
 
     heartbeat,
     heartbeatAck,

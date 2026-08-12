@@ -72,8 +72,6 @@ public class RestHandler {
         PlayerIdHandler playerIdHandler = new PlayerIdHandler();
         PlayerSessionHandler playerSessionHandler = new PlayerSessionHandler(main);
 
-        // The audio GET uses its own short-lived stream token and must not pass
-        // through the administrative JWT middleware used by the other /v1 routes.
         router.get("/v1/players/:playerId/stream")
                 .handler(playerIdHandler)
                 .handler(new PlayerStreamHandler(main));
@@ -200,56 +198,6 @@ public class RestHandler {
                 .method(HttpMethod.PUT)
                 .method(HttpMethod.PATCH)
                 .handler(new JsonBodyHandler());
-
-        router.post("/v1/players/:playerId/stream-token").handler(context -> {
-            PlayerSession playerSession = context.get("playerSession");
-            JsonObject json = JsonBodyHandler.getBody(context);
-
-            Object rawUserId = json.getValue("userId");
-            if (!(rawUserId instanceof String userId) || userId.isBlank()) {
-                RequestUtil.handleError(context, 400, "Missing or invalid userId");
-                return;
-            }
-
-            try {
-                userId = Long.toUnsignedString(Long.parseUnsignedLong(userId.trim()));
-            } catch (Exception exception) {
-                RequestUtil.handleError(context, 400, "Invalid userId");
-                return;
-            }
-
-            Long expiresInMs = null;
-            Object rawExpiresInMs = json.getValue("expiresInMs");
-
-            if (rawExpiresInMs != null) {
-                if (!(rawExpiresInMs instanceof Number number)) {
-                    RequestUtil.handleError(context, 400, "expiresInMs must be a number");
-                    return;
-                }
-
-                expiresInMs = number.longValue();
-
-                if (expiresInMs <= 0L) {
-                    RequestUtil.handleError(context, 400, "expiresInMs must be greater than 0");
-                    return;
-                }
-            }
-
-            try {
-                JsonObject token = main.getStreamTokenManager()
-                        .issue(playerSession, userId, expiresInMs)
-                        .toJson();
-
-                context.response()
-                        .setStatusCode(201)
-                        .putHeader("Cache-Control", "no-store")
-                        .send(token.toBuffer());
-            } catch (IllegalArgumentException exception) {
-                RequestUtil.handleError(context, 400, exception.getMessage());
-            } catch (IllegalStateException exception) {
-                RequestUtil.handleError(context, 410, exception.getMessage());
-            }
-        });
 
         router.post("/v1/players/:playerId/seek").handler(context -> {
             PlayerSession playerSession = context.get("playerSession");
@@ -384,49 +332,95 @@ public class RestHandler {
                 return;
             }
 
-            if (type != ConnectionType.DISCORD) {
-                RequestUtil.handleError(context, 400, "HTTP connections are created by GET /stream");
-                return;
+            if (type == ConnectionType.DISCORD) {
+                String guildId = json.getString("guildId");
+                String channelId = json.getString("channelId");
+                String userId = json.getString("userId");
+                String endpoint = json.getString("endpoint");
+                String token = json.getString("token");
+                String sessionId = json.getString("sessionId");
+
+                if (SourceTools.isBlank(guildId)
+                        || SourceTools.isBlank(channelId)
+                        || SourceTools.isBlank(endpoint)
+                        || SourceTools.isBlank(token)
+                        || SourceTools.isBlank(sessionId)) {
+                    RequestUtil.handleError(context, 400, "Missing Discord connection fields");
+                    return;
+                }
+
+                try {
+                    long parsedChannelId = Long.parseUnsignedLong(channelId);
+                    VoiceServerInfo serverInfo = VoiceServerInfo.builder()
+                            .setToken(token)
+                            .setChannelId(parsedChannelId)
+                            .setEndpoint(endpoint)
+                            .setSessionId(sessionId)
+                            .build();
+
+                    DiscordPlayerConnection connection = sessionManager.createDiscordConnection(
+                            player,
+                            guildId,
+                            channelId,
+                            userId,
+                            endpoint,
+                            serverInfo
+                    );
+
+                    context.response().setStatusCode(201).send(connection.toJson().toBuffer());
+                } catch (IllegalArgumentException exception) {
+                    RequestUtil.handleError(context, 400, exception.getMessage());
+                } catch (IllegalStateException exception) {
+                    RequestUtil.handleError(context, 409, exception.getMessage());
+                }
+            } else if (type == ConnectionType.HTTP) {
+                Object rawUserId = json.getValue("userId");
+                if (!(rawUserId instanceof String userId) || userId.isBlank()) {
+                    RequestUtil.handleError(context, 400, "Missing or invalid userId");
+                    return;
+                }
+
+                try {
+                    userId = userId.trim();
+                } catch (Exception exception) {
+                    RequestUtil.handleError(context, 400, "Invalid userId");
+                    return;
+                }
+
+                Long expiresInMs = null;
+                Object rawExpiresInMs = json.getValue("expiresInMs");
+
+                if (rawExpiresInMs != null) {
+                    if (!(rawExpiresInMs instanceof Number number)) {
+                        RequestUtil.handleError(context, 400, "expiresInMs must be a number");
+                        return;
+                    }
+
+                    expiresInMs = number.longValue();
+
+                    if (expiresInMs <= 0L) {
+                        RequestUtil.handleError(context, 400, "expiresInMs must be greater than 0");
+                        return;
+                    }
+                }
+
+                try {
+                    JsonObject token = main.getStreamTokenManager()
+                            .issue(player, userId, expiresInMs)
+                            .toJson();
+
+                    context.response()
+                            .setStatusCode(201)
+                            .putHeader("Cache-Control", "no-store")
+                            .send(token.toBuffer());
+                } catch (IllegalArgumentException exception) {
+                    RequestUtil.handleError(context, 400, exception.getMessage());
+                } catch (IllegalStateException exception) {
+                    RequestUtil.handleError(context, 410, exception.getMessage());
+                }
             }
 
-            String guildId = json.getString("guildId");
-            String channelId = json.getString("channelId");
-            String endpoint = json.getString("endpoint");
-            String token = json.getString("token");
-            String sessionId = json.getString("sessionId");
-
-            if (SourceTools.isBlank(guildId)
-                    || SourceTools.isBlank(channelId)
-                    || SourceTools.isBlank(endpoint)
-                    || SourceTools.isBlank(token)
-                    || SourceTools.isBlank(sessionId)) {
-                RequestUtil.handleError(context, 400, "Missing Discord connection fields");
-                return;
-            }
-
-            try {
-                long parsedChannelId = Long.parseUnsignedLong(channelId);
-                VoiceServerInfo serverInfo = VoiceServerInfo.builder()
-                        .setToken(token)
-                        .setChannelId(parsedChannelId)
-                        .setEndpoint(endpoint)
-                        .setSessionId(sessionId)
-                        .build();
-
-                DiscordPlayerConnection connection = sessionManager.createDiscordConnection(
-                        player,
-                        guildId,
-                        channelId,
-                        endpoint,
-                        serverInfo
-                );
-
-                context.response().setStatusCode(201).send(connection.toJson().toBuffer());
-            } catch (IllegalArgumentException exception) {
-                RequestUtil.handleError(context, 400, exception.getMessage());
-            } catch (IllegalStateException exception) {
-                RequestUtil.handleError(context, 409, exception.getMessage());
-            }
+            RequestUtil.handleError(context, 400, "Unknown connection type");
         });
 
         router.delete("/v1/players/:playerId/connections/:connectionId").handler(context -> {

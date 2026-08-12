@@ -1,5 +1,6 @@
 package com.github.WearifulCupid0.lavanode;
 
+import com.github.WearifulCupid0.lavanode.config.KoeClientManager;
 import com.github.WearifulCupid0.lavanode.config.KoeConfig;
 import com.github.WearifulCupid0.lavanode.config.AudioSourceConfig;
 import com.github.WearifulCupid0.lavanode.player.PlayerManager;
@@ -128,6 +129,7 @@ public class Main {
 
         log.debug("Setting up koe voice library");
         koe = KoeConfig.createKoe();
+        KoeClientManager.setKoe(koe);
 
         log.debug("Using PCM as the only internal player output format...");
         audioPlayerManager.setPlayerCleanupThreshold(Long.MAX_VALUE);

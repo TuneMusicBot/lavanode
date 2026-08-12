@@ -19,15 +19,14 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicInteger;
 
-/** Owns all independent players created by one authenticated bot/user. */
 public final class PlayerSessionManager {
     private final AudioPlayerManager audioPlayerManager;
     private final PlayerEventListener listener;
     private final Map<String, PlayerSession> players = new ConcurrentHashMap<>();
     private final Map<String, PlayerSession> playersByConnectionId = new ConcurrentHashMap<>();
     private final Map<String, String> connectionByGuildId = new ConcurrentHashMap<>();
-    private final KoeClient koe;
     private final StreamTokenManager streamTokenManager;
+    private final String identifier;
 
     private final ExecutorService preloadExecutor = Executors.newFixedThreadPool(
             Math.max(2, Runtime.getRuntime().availableProcessors()),
@@ -42,13 +41,13 @@ public final class PlayerSessionManager {
     public PlayerSessionManager(
             AudioPlayerManager audioPlayerManager,
             PlayerEventListener listener,
-            KoeClient koe,
-            StreamTokenManager streamTokenManager
+            StreamTokenManager streamTokenManager,
+            String identifier
     ) {
         this.audioPlayerManager = audioPlayerManager;
         this.listener = listener;
-        this.koe = koe;
         this.streamTokenManager = streamTokenManager;
+        this.identifier = identifier;
     }
 
     public PlayerSession create(PlayerSettings settings) {
@@ -80,12 +79,8 @@ public final class PlayerSessionManager {
         return audioPlayerManager;
     }
 
-    public KoeClient getKoe() {
-        return koe;
-    }
-
     public String getUserId() {
-        return Long.toString(koe.getClientId());
+        return this.identifier;
     }
 
     public PlayerSession get(String playerId) {
@@ -110,6 +105,7 @@ public final class PlayerSessionManager {
             PlayerSession player,
             String guildId,
             String channelId,
+            String userId,
             String endpoint,
             VoiceServerInfo serverInfo
     ) {
@@ -119,15 +115,18 @@ public final class PlayerSessionManager {
 
         long parsedGuildId = parseDiscordId(guildId, "guildId");
         long parsedChannelId = parseDiscordId(channelId, "channelId");
+        long parsedUserId = parseDiscordId(userId, "userId");
+
+        String normalizedUserId = Long.toUnsignedString(parsedUserId);
         String normalizedGuildId = Long.toUnsignedString(parsedGuildId);
 
-        if (connectionByGuildId.containsKey(normalizedGuildId)) {
-            throw new IllegalStateException("A Discord connection already exists for guild " + normalizedGuildId);
+        if (connectionByGuildId.containsKey(normalizedGuildId + normalizedUserId)) {
+            throw new IllegalStateException("A Discord connection already exists for guild " + normalizedGuildId + " with user " + normalizedUserId);
         }
 
         DiscordPlayerConnection connection = new DiscordPlayerConnection(
                 player,
-                this,
+                parsedUserId,
                 parsedGuildId,
                 parsedChannelId,
                 endpoint,
@@ -190,7 +189,6 @@ public final class PlayerSessionManager {
         connectionByGuildId.clear();
         preloadExecutor.shutdownNow();
         frameDispatchExecutor.shutdownNow();
-        koe.close();
     }
 
     public Collection<PlayerSession> getAll() {

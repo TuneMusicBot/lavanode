@@ -4,7 +4,6 @@ import com.github.WearifulCupid0.lavanode.Main;
 import com.github.WearifulCupid0.lavanode.player.PlayerFrameLossCounter;
 import com.github.WearifulCupid0.lavanode.player.PlayerSession;
 import com.github.WearifulCupid0.lavanode.player.filters.PlayerFilters;
-import com.github.WearifulCupid0.lavanode.radio.RadioPlaylist;
 import com.sedmelluq.discord.lavaplayer.player.AudioPlayer;
 import com.sedmelluq.discord.lavaplayer.player.AudioPlayerManager;
 import com.sedmelluq.discord.lavaplayer.player.DefaultAudioPlayer;
@@ -86,9 +85,6 @@ public class RequestUtil {
                 .put("type", playlist.getType())
                 .put("uri", playlist.getURI())
                 .put("size", playlist.getSize());
-
-        if (playlist instanceof RadioPlaylist)
-            jsonObject.put("fans", ((RadioPlaylist) playlist).getFans());
 
         List<AudioTrack> playlistTracks = playlist.getTracks();
         JsonArray tracks = new JsonArray();

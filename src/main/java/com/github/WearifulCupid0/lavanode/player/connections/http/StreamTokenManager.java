@@ -243,7 +243,7 @@ public final class StreamTokenManager {
                 .put("userId", token.clientUserId);
 
         main.getPlayerManager().dispatchEvent(
-                WebsocketOpCodes.httpClientConnect,
+                WebsocketOpCodes.connectionConnect,
                 payload,
                 token.playerSession.getUserId()
         );
@@ -262,7 +262,7 @@ public final class StreamTokenManager {
                 .put("reason", reason);
 
         main.getPlayerManager().dispatchEvent(
-                WebsocketOpCodes.httpClientDisconnect,
+                WebsocketOpCodes.connectionDisconnect,
                 payload,
                 token.playerSession.getUserId()
         );

@@ -5,6 +5,7 @@ import com.github.WearifulCupid0.lavanode.server.websocket.WebsocketConnection;
 import com.github.WearifulCupid0.lavanode.server.websocket.WebsocketOpCodes;
 import com.sedmelluq.discord.lavaplayer.player.AudioPlayerManager;
 import io.vertx.core.json.JsonObject;
+import moe.kyokobot.koe.KoeClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,16 +25,13 @@ public class PlayerManager {
         this.main = main;
     }
 
-    public PlayerSessionManager getOrCreate(String userId) {
-        long parsedUserId = parseDiscordId(userId, "userId");
-        String normalizedUserId = Long.toString(parsedUserId);
-
-        return this.sessionMap.computeIfAbsent(normalizedUserId, id ->
+    public PlayerSessionManager getOrCreate(String identifier) {
+        return this.sessionMap.computeIfAbsent(identifier, id ->
                 new PlayerSessionManager(
                         this.main.getAudioPlayerManager(),
                         new PlayerSessionEventListener(this),
-                        this.main.getKoe().newClient(parsedUserId),
-                        this.main.getStreamTokenManager()
+                        this.main.getStreamTokenManager(),
+                        identifier
                 )
         );
     }
@@ -48,6 +46,10 @@ public class PlayerManager {
             log.debug("Destroying all players from user id: {}", normalizedUserId);
             session.shutdown();
         }
+    }
+
+    public KoeClient getKoeClient(String userId) {
+        return this.main.getKoe().newClient(Long.parseLong(userId));
     }
 
     public Collection<PlayerSessionManager> getAll() {

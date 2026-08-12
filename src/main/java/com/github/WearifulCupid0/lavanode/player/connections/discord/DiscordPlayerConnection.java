@@ -1,5 +1,6 @@
 package com.github.WearifulCupid0.lavanode.player.connections.discord;
 
+import com.github.WearifulCupid0.lavanode.config.KoeClientManager;
 import com.github.WearifulCupid0.lavanode.player.PlayerSession;
 import com.github.WearifulCupid0.lavanode.player.PlayerSessionManager;
 import com.github.WearifulCupid0.lavanode.player.connections.ConnectionState;
@@ -7,6 +8,7 @@ import com.github.WearifulCupid0.lavanode.player.connections.ConnectionType;
 import com.github.WearifulCupid0.lavanode.player.connections.PlayerConnection;
 import com.github.WearifulCupid0.lavanode.util.RequestUtil;
 import io.vertx.core.json.JsonObject;
+import moe.kyokobot.koe.KoeClient;
 import moe.kyokobot.koe.MediaConnection;
 import moe.kyokobot.koe.VoiceServerInfo;
 
@@ -17,7 +19,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class DiscordPlayerConnection implements PlayerConnection {
     private final String id = UUID.randomUUID().toString();
     private final PlayerSession player;
-    private final PlayerSessionManager manager;
+    private final long userId;
     private final long guildId;
     private final long channelId;
     private final String endpoint;
@@ -33,14 +35,14 @@ public final class DiscordPlayerConnection implements PlayerConnection {
 
     public DiscordPlayerConnection(
             PlayerSession player,
-            PlayerSessionManager manager,
+            long userId,
             long guildId,
             long channelId,
             String endpoint,
             VoiceServerInfo serverInfo
     ) {
         this.player = player;
-        this.manager = manager;
+        this.userId = userId;
         this.guildId = guildId;
         this.channelId = channelId;
         this.endpoint = endpoint;
@@ -54,7 +56,7 @@ public final class DiscordPlayerConnection implements PlayerConnection {
 
         state = ConnectionState.CONNECTING;
 
-        MediaConnection connection = manager.getKoe().createConnection(guildId);
+        MediaConnection connection = KoeClientManager.getClient(userId).createConnection(guildId);
         DiscordFrameDispatcher sender = new DiscordFrameDispatcher(player);
 
         this.mediaConnection = connection;
@@ -163,7 +165,7 @@ public final class DiscordPlayerConnection implements PlayerConnection {
         }
 
         try {
-            manager.getKoe().destroyConnection(guildId);
+            KoeClientManager.getClient(userId).destroyConnection(guildId);
         } catch (Throwable error) {
             player.notifyConnectionError(this, error);
         }

@@ -12,21 +12,21 @@ public final class JWTUserHandler implements Handler<RoutingContext> {
             return;
         }
 
-        String userId = context.user().principal().getString("sub");
+        String identifier = context.user().principal().getString("sub");
 
-        if (userId == null || userId.isBlank()) {
-            userId = context.user().principal().getString("user_id");
+        if (identifier == null || identifier.isBlank()) {
+            identifier = context.user().principal().getString("identifier");
         }
 
-        if (userId == null || userId.isBlank()) {
-            RequestUtil.handleError(context, 400, "Missing user id in token");
+        if (identifier == null || identifier.isBlank()) {
+            RequestUtil.handleError(context, 400, "Missing identifier in token");
             return;
         }
 
         try {
-            context.put("user-id", Long.toUnsignedString(Long.parseUnsignedLong(userId)));
+            context.put("identifier", identifier);
         } catch (Exception e) {
-            RequestUtil.handleError(context, 400, "Invalid user id in token");
+            RequestUtil.handleError(context, 400, "Invalid identifier in token");
             return;
         }
 
