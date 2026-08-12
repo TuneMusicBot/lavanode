@@ -1,5 +1,6 @@
 package com.github.WearifulCupid0.lavanode.player;
 
+import com.github.WearifulCupid0.lavanode.config.koe.KoeClientManager;
 import com.github.WearifulCupid0.lavanode.player.connections.PlayerConnection;
 import com.github.WearifulCupid0.lavanode.player.connections.discord.DiscordPlayerConnection;
 import com.github.WearifulCupid0.lavanode.player.connections.http.StreamTokenManager;
@@ -189,6 +190,7 @@ public final class PlayerSessionManager {
         connectionByGuildId.clear();
         preloadExecutor.shutdownNow();
         frameDispatchExecutor.shutdownNow();
+        KoeClientManager.cleanup();
     }
 
     public Collection<PlayerSession> getAll() {

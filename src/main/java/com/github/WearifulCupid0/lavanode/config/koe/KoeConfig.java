@@ -1,6 +1,5 @@
-package com.github.WearifulCupid0.lavanode.config;
+package com.github.WearifulCupid0.lavanode.config.koe;
 
-import com.sedmelluq.discord.lavaplayer.player.AudioPlayerManager;
 import com.sedmelluq.lava.common.natives.architecture.DefaultArchitectureTypes;
 import com.sedmelluq.lava.common.natives.architecture.DefaultOperatingSystemTypes;
 import com.sedmelluq.lava.common.natives.architecture.SystemType;

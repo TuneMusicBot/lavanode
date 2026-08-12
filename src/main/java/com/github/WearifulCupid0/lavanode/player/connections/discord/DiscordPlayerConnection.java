@@ -1,14 +1,12 @@
 package com.github.WearifulCupid0.lavanode.player.connections.discord;
 
-import com.github.WearifulCupid0.lavanode.config.KoeClientManager;
+import com.github.WearifulCupid0.lavanode.config.koe.KoeClientManager;
 import com.github.WearifulCupid0.lavanode.player.PlayerSession;
-import com.github.WearifulCupid0.lavanode.player.PlayerSessionManager;
 import com.github.WearifulCupid0.lavanode.player.connections.ConnectionState;
 import com.github.WearifulCupid0.lavanode.player.connections.ConnectionType;
 import com.github.WearifulCupid0.lavanode.player.connections.PlayerConnection;
 import com.github.WearifulCupid0.lavanode.util.RequestUtil;
 import io.vertx.core.json.JsonObject;
-import moe.kyokobot.koe.KoeClient;
 import moe.kyokobot.koe.MediaConnection;
 import moe.kyokobot.koe.VoiceServerInfo;
 
@@ -136,6 +134,7 @@ public final class DiscordPlayerConnection implements PlayerConnection {
                 .put("id", id)
                 .put("type", getType().jsonName())
                 .put("state", state.jsonName())
+                .put("userId", userId)
                 .put("guildId", getGuildId())
                 .put("channelId", getChannelId())
                 .put("endpoint", endpoint)

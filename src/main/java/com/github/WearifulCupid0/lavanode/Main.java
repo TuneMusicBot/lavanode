@@ -1,7 +1,7 @@
 package com.github.WearifulCupid0.lavanode;
 
-import com.github.WearifulCupid0.lavanode.config.KoeClientManager;
-import com.github.WearifulCupid0.lavanode.config.KoeConfig;
+import com.github.WearifulCupid0.lavanode.config.koe.KoeClientManager;
+import com.github.WearifulCupid0.lavanode.config.koe.KoeConfig;
 import com.github.WearifulCupid0.lavanode.config.AudioSourceConfig;
 import com.github.WearifulCupid0.lavanode.player.PlayerManager;
 import com.github.WearifulCupid0.lavanode.player.PlayerSession;
@@ -24,7 +24,6 @@ import com.sedmelluq.lavaplayer.extensions.cache.RedisAudioLoadCache;
 import com.sedmelluq.lavaplayer.extensions.cache.policy.CachePolicy;
 import com.sedmelluq.lavaplayer.extensions.cache.policy.CachePolicyBuilder;
 import com.sedmelluq.lavaplayer.extensions.thirdpartysources.SourceTools;
-import com.sedmelluq.lavaplayer.extensions.thirdpartysources.deezer.DeezerAudioSourceManager;
 import io.vertx.core.Vertx;
 import moe.kyokobot.koe.Koe;
 import org.slf4j.Logger;
