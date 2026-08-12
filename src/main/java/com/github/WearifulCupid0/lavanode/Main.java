@@ -39,7 +39,7 @@ public class Main {
     private final AudioPlayerManager audioPlayerManager;
 
     private final Vertx vertx = Vertx.vertx();
-    private final Koe koe;
+    private Koe koe;
     private final String tokenSecret;
     private final PlayerManager playerManager;
     private final StreamTokenManager streamTokenManager;
@@ -126,10 +126,6 @@ public class Main {
 
         AudioSourceConfig.registerToSourceManager(audioPlayerManager);
 
-        log.debug("Setting up koe voice library");
-        koe = KoeConfig.createKoe();
-        KoeClientManager.setKoe(koe);
-
         log.debug("Using PCM as the only internal player output format...");
         audioPlayerManager.setPlayerCleanupThreshold(Long.MAX_VALUE);
         audioPlayerManager.getConfiguration().setOutputFormat(StandardAudioDataFormats.DISCORD_PCM_S16_BE);
@@ -178,6 +174,12 @@ public class Main {
 
 
     public Koe getKoe() {
+        if (koe == null) {
+            log.debug("Setting up koe voice library");
+            koe = KoeConfig.createKoe();
+            KoeClientManager.setKoe(koe);
+        }
+
         return koe;
     }
 

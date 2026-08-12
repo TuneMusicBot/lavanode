@@ -143,9 +143,8 @@ public final class DiscordPlayerConnection implements PlayerConnection {
                 .put("createdAt", createdAt)
                 .put("connectedAt", connectedAt);
 
-        MediaConnection connection = mediaConnection;
-        if (connection != null) {
-            json.put("media", RequestUtil.mediaToJson(connection));
+        if (mediaConnection != null) {
+            json.put("media", RequestUtil.mediaToJson(mediaConnection));
         }
 
         return json;
