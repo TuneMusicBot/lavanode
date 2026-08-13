@@ -71,7 +71,10 @@ public class PlayerManager {
     }
 
     public KoeClient getKoeClient(String userId) {
-        return this.main.getKoe().newClient(Long.parseUnsignedLong(userId));
+        // Keep all callers on the same per-bot KoeClient cache used by
+        // DiscordPlayerConnection instead of creating parallel clients.
+        this.main.getKoe();
+        return KoeClientManager.getClient(Long.parseUnsignedLong(userId));
     }
 
     public Collection<PlayerSessionManager> getAll() {

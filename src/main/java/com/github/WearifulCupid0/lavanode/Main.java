@@ -107,6 +107,12 @@ public class Main {
         audioPlayerManager.setPlayerCleanupThreshold(Long.MAX_VALUE);
         audioPlayerManager.getConfiguration().setOutputFormat(StandardAudioDataFormats.DISCORD_PCM_S16_BE);
 
+        // Initialize Koe before the REST server can accept Discord connection
+        // creation requests. DiscordPlayerConnection.connect() resolves clients
+        // through KoeClientManager, so leaving Koe lazy here can make the first
+        // /connections request fail with "Koe not defined".
+        getKoe();
+
         playerManager = new PlayerManager(this);
         streamTokenManager = new StreamTokenManager(this);
         log.debug("Creating websocket manager before starting webserver...");
